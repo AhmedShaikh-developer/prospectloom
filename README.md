@@ -23,7 +23,7 @@ Requires Node 22.13+ (uses the built-in `node:sqlite`). Data lives in `data/pipe
    - If the mailbox fails (wrong password, network, Hostinger rate limit), the email stays approved, sending pauses for 30 minutes and the dashboard says why. The approved queue is never used up by failed attempts.
 3. **AI writing**: get a free key at console.groq.com/keys and put it in `.env` as `GROQ_API_KEY`. Click *Test AI*. The default model is `openai/gpt-oss-120b`.
 4. **Settings → Autopilot & schedule**:
-   - Set the recipients' timezone and a daily limit. Start at 10 and raise it slowly.
+   - Set the recipients' timezone and the starting daily limit (10). The warm-up raises it by itself (see below).
    - Turn autopilot on from the dashboard.
 
 ## How leads come in (hands-free)
@@ -37,6 +37,10 @@ Requires Node 22.13+ (uses the built-in `node:sqlite`). Data lives in `data/pipe
 - **Already contacted**: paste emails or domains you emailed with other tools. Your Hostinger Sent folder is read over IMAP. Either way, those people never get a second intro.
 - **Background jobs**: searches, imports, research and autopilot run on the server. Their progress shows in the sidebar on every page, so leaving a page never loses work.
 
+## Research, in short
+
+Every company's own website is read (up to 10 pages, robots.txt respected): what they do, a published email, an address and one real fact for the opener. Then the email's domain is checked for MX/SPF/DMARC, and the company is checked against duplicates, opt-outs and your Sent folder. Websites that no longer exist are excluded automatically. Sites behind bot protection (Cloudflare, SiteGround) are never bypassed: they're parked for 30 days and listed for you. Companies without a published email are re-checked every 14 days.
+
 ## Daily workflow
 
 1. **Research** runs automatically every 5 minutes while the engine is on:
@@ -44,7 +48,8 @@ Requires Node 22.13+ (uses the built-in `node:sqlite`). Data lives in `data/pipe
    - It runs dedup and suppression, picks the offer (A, B or C), and picks an opener from a real fact on the site, with its source URL.
 2. **Autopilot** (once a day plus an hourly top-up) writes one email per READY lead with Groq, using only verified facts.
    - A quality gate rejects placeholders, links, hype and invented numbers, and falls back to your template.
-   - It approves the emails and sends them spaced out, inside the window and the daily limit.
+   - It approves the emails and sends them in **rounds** (default 2, so 10 → 5 at the window start + 5 around midday), with a random 6–14 minute gap between emails, inside the window and the daily limit. "Today" is the recipients' day, not your Mac's.
+   - **Warm-up** (Settings → Autopilot & schedule → Volume, rounds & warm-up): 10/day for the first 14 days after your first email, then +5 every 7 days up to 40/day. If more than 3% bounce, it drops back to the starting level. The dashboard shows today's rounds and the warm-up day.
    - Each email is re-checked right before sending.
    - **Bounce guard**: automatic sending pauses if more than 5% of the last 7 days' emails bounced (once at least 20 were sent).
 3. **Replies & pipeline**: the mailbox syncs every 10 minutes. Opt-outs and bounces are suppressed permanently.
