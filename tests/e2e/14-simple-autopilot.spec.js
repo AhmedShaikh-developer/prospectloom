@@ -8,7 +8,7 @@ test.describe.serial('Simple pipeline: local finder → research → autopilot',
     await ensureCompliance(request);
     await api(request, 'PUT', '/settings', {
       pipeline_mode: 'simple', groq_api_key: 'groq-test', daily_send_limit: '200',
-      send_days: '0,1,2,3,4,5,6', send_window_start: '0', send_window_end: '24', min_minutes_between_sends: '0', max_minutes_between_sends: '0', send_rounds: '1',
+      send_days: '0,1,2,3,4,5,6', send_window_start: '0', send_window_end: '24', min_minutes_between_sends: '0', max_minutes_between_sends: '0', send_spread: '0',
     });
     await request.post(`${MOCK}/__groq-mode`, { data: { mode: 'good' } });
   });

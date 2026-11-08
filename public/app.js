@@ -24,6 +24,7 @@ async function api(method, path, body) {
     method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined,
   });
   const data = res.headers.get('content-type')?.includes('json') ? await res.json() : await res.text();
+  if (res.status === 401 && data?.signIn) { location.href = '/login'; throw new Error('Signing you in again…'); }
   if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
   return data;
 }
@@ -127,7 +128,13 @@ const routes = {
   integrations: renderIntegrations,
 };
 
-async function route() {
+// Page changes take turns: a slow page that finishes late can never overwrite the page you opened after it.
+let routeChain = Promise.resolve();
+function route() {
+  routeChain = routeChain.then(renderRoute, renderRoute);
+  return routeChain;
+}
+async function renderRoute() {
   const hash = location.hash.replace(/^#\/?/, '') || 'dashboard';
   const [pathPart, query = ''] = hash.split('?');
   const [name, id] = pathPart.split('/');
@@ -164,20 +171,22 @@ async function refreshNav() {
 const blockerHtml = (b) => `<div class="alert blocker sev-${b.severity}">${ic('alert')}<div class="grow"><strong>${esc(b.area)}</strong> — ${esc(b.message)}</div>${b.link ? `<a href="${b.link}" class="small-t">Fix →</a>` : ''}</div>`;
 
 // ---------------------------------------------------------------- dashboard (Phase 8/11/12)
-/** Today's rounds and the warm-up stage, in plain words. */
+/** Today's send times and the warm-up stage, in plain words. */
 function sendPlanStrip(t) {
   const p = t.plan; const w = t.warmup;
   if (!p) return '';
-  const rounds = p.rounds.map((r, i) => {
-    const state = t.sent >= r.upto ? 'done' : i === p.current - 1 ? 'now' : '';
-    return `<span class="chip ${state === 'now' ? 'active' : ''}" data-testid="plan-round">Round ${r.round} · ${r.at} · ${r.count} email${r.count === 1 ? '' : 's'}${state === 'done' ? ' ✓' : ''}</span>`;
-  }).join('');
+  const chip = (x) => `<span class="chip slot ${x.sent ? 'sent' : x.at === p.next ? 'active' : ''}" data-testid="plan-slot" title="${x.sent ? 'sent' : 'planned'}">${x.at}${x.sent ? ' ✓' : ''}</span>`;
+  // Up to 12 times are shown; with more, the next 12 upcoming ones plus a count.
+  const shown = p.slots.length <= 12 ? p.slots : p.slots.filter((x) => !x.sent).slice(0, 12);
+  const chips = shown.map(chip).join('') + (p.slots.length > shown.length ? `<span class="chip slot muted">+${p.slots.length - shown.length} more</span>` : '');
   const warm = !w?.enabled ? `Fixed limit: ${w?.limit ?? t.limit}/day (warm-up off)`
     : w.braked ? `Warm-up paused at ${w.limit}/day — too many bounces this week`
       : !w.started ? `Warm-up starts with your first email: ${w.base}/day for ${w.hold} days, then +${w.step} every ${w.every} days up to ${w.max}/day`
         : `Warm-up day ${w.day}: ${w.limit}/day${w.nextLimit ? ` → ${w.nextLimit}/day from ${fmtDate(w.nextDate)}` : ' (maximum reached)'}`;
-  return `<div class="plan-strip" data-testid="send-plan"><div class="row" style="gap:8px;flex-wrap:wrap"><strong class="small-t">Today (${esc(p.timezone)} time):</strong>${rounds}</div>
-    <div class="hint mt" data-testid="warmup-status">${esc(warm)} · <a href="#/settings?tab=schedule">change</a></div></div>`;
+  return `<div class="plan-strip" data-testid="send-plan">
+    <div class="small-t"><strong>Today: ${p.limit} emails at ${p.spread ? 'random times' : 'the window start'}, ${p.windowStart}–${p.windowEnd}</strong> <span class="muted">(${esc(p.timezone)})</span> · ${p.sent} sent${p.next ? ` · next ≈ <strong>${p.next}</strong>` : ''}</div>
+    <div class="slot-chips">${chips}</div>
+    <div class="hint" data-testid="warmup-status">${esc(warm)} · <a href="#/settings?tab=schedule">change</a></div></div>`;
 }
 
 // ---------------------------------------------------------------- dashboard
@@ -206,18 +215,18 @@ function autopilotCard(d, ap, ov) {
   const [ws, we] = (ap.window.match(/(\d+):00–(\d+):00/) || [0, 9, 16]).slice(1).map(Number);
   const startM = ws * 60; const endM = Math.max(startM + 60, we * 60);
   const pos = (m) => Math.max(0, Math.min(100, ((m - startM) / (endM - startM)) * 100));
-  const timeline = `<div class="timeline" data-testid="send-timeline" aria-label="Today's sending rounds">
+  const timeline = `<div class="timeline" data-testid="send-timeline" aria-label="Today's send times">
       <div class="track"></div><div class="done" style="width:${pos(p.nowMin)}%"></div>
-      ${p.rounds.map((r) => `<div class="rd ${t.sent >= r.upto ? 'ok' : ''}" style="left:${pos(r.atMin)}%" title="Round ${r.round} at ${r.at} — ${r.count} emails">${r.count}</div><div class="tl" style="left:${pos(r.atMin)}%">${r.at}</div>`).join('')}
+      ${p.slots.map((x) => `<div class="sd ${x.sent ? 'ok' : x.at === p.next ? 'nx' : ''}" style="left:${pos(x.atMin)}%" title="${x.at} — ${x.sent ? 'sent' : 'planned'}"></div>`).join('')}
       ${p.nowMin > startM && p.nowMin < endM ? `<div class="now" style="left:${pos(p.nowMin)}%"></div>` : ''}
-      <div class="tl" style="left:100%;transform:translateX(-100%)">${String(we).padStart(2, '0')}:00</div></div>`;
+      <div class="tl" style="left:0;transform:none">${String(ws).padStart(2, '0')}:00</div><div class="tl" style="left:100%;transform:translateX(-100%)">${String(we).padStart(2, '0')}:00</div></div>`;
   return `<div class="card autopilot reveal span-4 ${ap.enabled ? 'on' : ''}" data-testid="autopilot-card">
     <div class="card-head"><h2>${ic('bolt')}Autopilot ${ap.enabled ? badge('ok', 'On') : badge('warn', 'Off')}</h2>
       <button id="ap-toggle" class="small ${ap.enabled ? '' : 'primary'}" data-testid="autopilot-toggle">${ap.enabled ? 'Turn off' : `${ic('bolt')}Turn on autopilot`}</button></div>
     <p class="sub small-t" style="margin:-4px 0 6px">${ap.enabled
     ? (ap.review
-      ? `Researches and writes one email per lead${ap.ai ? ' with AI' : ''}, then <strong>waits for your approval</strong>. Approved emails go out in rounds, ${esc(ap.window)} (${esc(ap.timezone)}).`
-      : `Researches, writes${ap.ai ? ' with AI' : ''} and sends up to <strong>${t.limit}</strong> a day in rounds, ${esc(ap.window)} (${esc(ap.timezone)}) — no need to press Send.`)
+      ? `Researches and writes one email per lead${ap.ai ? ' with AI' : ''}, then <strong>waits for your approval</strong>. Approved emails go out at random times, ${esc(ap.window)} (${esc(ap.timezone)}).`
+      : `Researches, writes${ap.ai ? ' with AI' : ''} and sends up to <strong>${t.limit}</strong> a day at random, human-like times, ${esc(ap.window)} (${esc(ap.timezone)}) — no need to press Send.`)
     : 'You approve and send each email yourself. Turn autopilot on to research, write and send every day automatically.'}
       ${ap.ai ? '' : ' <a href="#/settings?tab=ai">Add a free Groq key</a> so every email is written for that lead.'}</p>
     ${timeline}
@@ -327,7 +336,7 @@ async function renderDashboard() {
       <div class="card reveal span-5"><div class="card-head"><h2>${ic('send')}Outreach activity</h2>
         <div class="legend"><span class="legend-i"><span class="sw" style="background:var(--s1)"></span>Sent</span><span class="legend-i"><span class="sw" style="background:var(--s2)"></span>Replies</span></div></div>
         ${chart({ type: 'bars', labels: se.days, xFormat: 'date', series: [{ label: 'Sent', values: se.sent, color: 'var(--s1)' }, { label: 'Replies', values: se.replies, color: 'var(--s2)' }] }, { height: 210, label: 'Emails sent and replies per day' })}
-        <p class="hint small-t" style="margin:6px 0 0">${ov.totals.sent ? `${n(ov.totals.sent)} sent in total · ${ov.replyRate}% reply rate` : 'Your first emails go out in today\'s first round.'}</p></div>
+        <p class="hint small-t" style="margin:6px 0 0">${ov.totals.sent ? `${n(ov.totals.sent)} sent in total · ${ov.replyRate}% reply rate` : 'Your first emails go out at today\'s first send time.'}</p></div>
 
       <div class="card reveal span-12" data-testid="lead-sources"><div class="card-head"><h2>${ic('pin')}Lead sources</h2><a href="#/integrations" class="small-t">Manage integrations →</a></div>
         <div class="sources">${sourcesHtml}</div></div>
@@ -351,7 +360,11 @@ async function renderDashboard() {
       <div class="card reveal span-6"><div class="card-head"><h2>Integrations</h2><a href="#/integrations" class="small-t">Manage →</a></div><table class="plain"><tbody>
         ${[['Hostinger SMTP (sending)', d.integrations.smtp.configured, d.integrations.smtp.mode === 'capture' ? 'test capture mode' : ''], ['Hostinger IMAP (replies)', d.integrations.imap.configured, d.integrations.imap.lastSync ? 'synced ' + fmtDate(d.integrations.imap.lastSync) : ''], ['Groq AI (email writing)', d.integrations.ai.configured, d.integrations.ai.model],
           ['HubSpot', d.integrations.hubspot.configured, 'optional CRM', true], ['Apollo', d.integrations.apollo.configured, 'optional lead source', true], ['Hunter.io', ov.sourceStates.find((s) => s.name === 'hunter')?.configured, 'optional email finder', true], ['Clay', d.integrations.clay.configured, 'optional · CSV import works without it', true]]
-          .map(([k, ok, note, optional]) => `<tr><td><span class="status-dot ${ok ? 'on' : ''}"></span>&nbsp; ${k}</td><td class="muted small-t">${esc(note || '')}</td><td class="num">${ok ? badge('ok', 'Connected') : optional ? badge('', 'Optional') : badge('warn', 'Not set up')}</td></tr>`).join('')}</tbody></table></div>
+          .map(([k, ok, note, optional]) => {
+            const st = ov.sourceStates.find((x) => x.label === k || (k === 'Hunter.io' && x.name === 'hunter'));
+            const rejected = ok && st && st.enabled && st.status === 'auth';
+            return `<tr><td><span class="status-dot ${ok && !rejected ? 'on' : ''}"></span>&nbsp; ${k}</td><td class="muted small-t">${esc(note || '')}</td><td class="num">${rejected ? badge('bad', 'Key rejected') : ok ? badge('ok', 'Connected') : optional ? badge('', 'Optional') : badge('warn', 'Not set up')}</td></tr>`;
+          }).join('')}</tbody></table></div>
     </div>`;
 
   $$('#range button').forEach((b) => { b.onclick = () => { dashRange = Number(b.dataset.r); try { localStorage.setItem('pl-range', dashRange); } catch { /* ignore */ } route(); }; });
@@ -361,7 +374,7 @@ async function renderDashboard() {
   $('#ap-run').onclick = (e) => act(e.currentTarget, () => POST('/autopilot/run')).then((r) => {
     if (!r) return;
     const held = r.held != null;
-    $('#ap-result').innerHTML = `<div class="alert mt" data-testid="autopilot-result">${ic('check')}<div class="grow"><strong>${held ? `${r.held} email${r.held === 1 ? '' : 's'} waiting for your approval` : `${r.approved} email${r.approved === 1 ? '' : 's'} ready to send`}</strong> (${r.drafted} new, ${r.aiWritten} written by AI${r.followups ? `, ${r.followups} follow-ups` : ''}${r.blocked ? `, ${r.blocked} blocked by checks` : ''}). ${held ? 'Approve them in Outreach.' : r.approved ? (ap.enabled ? 'They go out automatically, in rounds, in the sending window.' : 'Send them from Outreach, or turn autopilot on.') : 'No READY leads left for today — find more leads.'}
+    $('#ap-result').innerHTML = `<div class="alert mt" data-testid="autopilot-result">${ic('check')}<div class="grow"><strong>${held ? `${r.held} email${r.held === 1 ? '' : 's'} waiting for your approval` : `${r.approved} email${r.approved === 1 ? '' : 's'} ready to send`}</strong> (${r.drafted} new, ${r.aiWritten} written by AI${r.followups ? `, ${r.followups} follow-ups` : ''}${r.blocked ? `, ${r.blocked} blocked by checks` : ''}). ${held ? 'Approve them in Outreach.' : r.approved ? (ap.enabled ? 'They go out automatically at random times in the sending window.' : 'Send them from Outreach, or turn autopilot on.') : 'No READY leads left for today — find more leads.'}
       ${r.notes.length ? `<details class="small-t"><summary>Details</summary><ul>${r.notes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}</div><a href="#/outreach" class="small-t">Review →</a></div>`;
   });
   // Domain authentication chips (DNS lookup — filled in when it answers)
@@ -1093,7 +1106,7 @@ async function renderSetup() {
     ${section('clay', 'Clay (optional)', I.clay.configured, 'Clay has no API that other apps can read from — Clay sends rows to this app instead (webhook), or you export CSVs.', [
     '<strong>Simplest:</strong> in your Clay table click <strong>Export → CSV</strong> and drop the file into the <span class="code">leads csv</span> folder. It is imported within 10 minutes, columns detected automatically.',
     '<strong>Automatic:</strong> run a free Cloudflare Tunnel so Clay can reach this Mac: <span class="code">brew install cloudflared</span>, then <span class="code">cloudflared tunnel --url http://127.0.0.1:4317</span> — it prints a public https address.',
-    'Before that, set <span class="code">DASHBOARD_PASSWORD=</span> in <span class="code">.env</span> and restart, so only the webhook and unsubscribe links are public.',
+    'Sign-in protects everything else automatically — only the webhook (with its secret) and the unsubscribe links are public.',
     'Find &amp; import → <strong>Clay webhook</strong> → <strong>Generate new secret</strong>. In Clay add an <strong>HTTP API</strong> column: method POST, URL <span class="code">https://&lt;tunnel&gt;/hooks/clay</span>, header <span class="code">x-clay-secret: &lt;secret&gt;</span>, body = the row as JSON. Turn on auto-run and every new Clay row lands here.',
   ])}`;
   $('#sender-auth').onclick = (e) => act(e.currentTarget, () => GET('/sender/auth')).then((r) => {
@@ -1119,9 +1132,7 @@ async function renderSettings({ params = {} } = {}) {
       <div class="card"><h2>Offer B</h2>${f('offer_b_name', 'Name')}${f('offer_b_pitch', 'One-line pitch (used in emails)', { type: 'textarea' })}<div class="grid g2">${f('offer_b_min_employees', 'Min employees', { type: 'number' })}${f('offer_b_max_employees', 'Max employees', { type: 'number' })}</div>${f('offer_b_industries', 'Target agency types')}</div>
       <div class="card"><h2>Offer C <span class="muted small-t">B2C / local</span></h2>${f('offer_c_name', 'Name')}${f('offer_c_pitch', 'One-line pitch (used in emails)', { type: 'textarea' })}${f('offer_c_industries', 'Target business types')}</div></div>`,
     sender: `<div class="card"><h2>Sender identity &amp; CAN-SPAM</h2><p class="sub" style="margin:-6px 0 14px">Required before any company can become READY.</p>
-      <div class="grid g2">${f('sender_name', 'Sender name')}${f('sender_title', 'Sender title')}${f('sender_email', 'Sender email (your Hostinger mailbox)')}${f('sender_company', 'Company')}${f('sender_website', 'Website')}${f('sender_postal_address', 'Physical postal address')}</div>${f('unsubscribe_text', 'Opt-out line')}</div>
-      <div class="card mt"><div class="card-head"><h2>Logo</h2><span class="hint">shown in the sidebar · stored privately with your data</span></div>
-        <div class="row"><span id="logo-prev"></span><input type="file" id="logo-file" accept="image/png,image/jpeg,image/webp,image/svg+xml" style="width:auto" data-testid="logo-file"><button type="button" class="ghost" id="logo-remove">Remove</button></div></div>`,
+      <div class="grid g2">${f('sender_name', 'Sender name')}${f('sender_title', 'Sender title')}${f('sender_email', 'Sender email (your Hostinger mailbox)')}${f('sender_company', 'Company')}${f('sender_website', 'Website')}${f('sender_postal_address', 'Physical postal address')}</div>${f('unsubscribe_text', 'Opt-out line')}</div>`,
     schedule: `<div class="card" data-testid="autopilot-settings"><h2>${ic('bolt')}Autopilot</h2><p class="sub" style="margin:-6px 0 14px">When on, it researches new leads, writes one email per lead (with AI if a Groq key is set), approves emails that pass every check, and sends them within the limits below. The app must be running.</p>
       ${f('autopilot_enabled', 'Run the whole pipeline automatically every day', { type: 'checkbox' })}
       ${f('autopilot_review', 'Let me approve each email before it goes out (autopilot still finds, researches and writes)', { type: 'checkbox' })}
@@ -1130,10 +1141,11 @@ async function renderSettings({ params = {} } = {}) {
       ${f('allow_provider_emails', 'Also email addresses that come from Clay, Apollo or your CSV files (the email must be on the company’s own domain; mailboxes are not validated, so bounces are watched)', { type: 'checkbox' })}
       ${f('bounce_guard_enabled', 'Pause automatic sending if more than 5% of the last 7 days’ emails bounce (protects your domain)', { type: 'checkbox' })}
       ${f('watch_leads_folder', 'Import new CSV files from the “leads csv” folder automatically', { type: 'checkbox' })}</div>
-      <div class="card" data-testid="volume-settings"><h2>Volume, rounds &amp; warm-up</h2><p class="sub" style="margin:-6px 0 14px">Emails go out in rounds spread across the window, with a random gap between each one — the way a person sends, which keeps your domain reputation healthy.</p>
-      <div class="grid g3">${f('daily_send_limit', 'Daily limit (warm-up starting level)', { type: 'number' })}${f('send_rounds', 'Split each day into', { type: 'select', options: { 1: '1 round (all in one go)', 2: '2 rounds (e.g. 10 → 5 + 5)', 3: '3 rounds', 4: '4 rounds' } })}${f('send_days', 'Send days (0=Sun … 6=Sat)')}
+      <div class="card" data-testid="volume-settings"><h2>Volume, timing &amp; warm-up</h2><p class="sub" style="margin:-6px 0 14px">Each day's emails go out at random times across the window — a few minutes apart, then a longer break, like a person working through a list. A 6-hour window (e.g. 9–15) is recommended.</p>
+      <div class="grid g3">${f('daily_send_limit', 'Daily limit (warm-up starting level)', { type: 'number' })}${f('send_days', 'Send days (0=Sun … 6=Sat)')}
       ${f('send_window_start', 'Send window start (hour)', { type: 'number' })}${f('send_window_end', 'Send window end (hour)', { type: 'number' })}${f('reserve_target_days', 'Reserve target (days)', { type: 'number' })}
-      ${f('min_minutes_between_sends', 'Gap between emails — from (minutes)', { type: 'number' })}${f('max_minutes_between_sends', '… to (minutes, random in between)', { type: 'number' })}</div>
+      ${f('min_minutes_between_sends', 'Shortest gap between emails (minutes)', { type: 'number' })}${f('max_minutes_between_sends', 'Usual longest gap (minutes)', { type: 'number' })}</div>
+      ${f('send_spread', 'Send at random, human-like times across the whole window (recommended — protects your domain)', { type: 'checkbox' })}
       <h3>Warm-up</h3>
       ${f('warmup_enabled', 'Raise the daily limit automatically over time (recommended for a new mailbox)', { type: 'checkbox' })}
       <div class="grid g4">${f('warmup_hold_days', 'Keep the starting limit for (days)', { type: 'number' })}${f('warmup_step', 'Then add (emails per day)', { type: 'number' })}${f('warmup_every_days', 'Every (days)', { type: 'number' })}${f('warmup_max', 'Up to (emails per day)', { type: 'number' })}</div>
@@ -1150,7 +1162,14 @@ async function renderSettings({ params = {} } = {}) {
       <div class="grid g2">${f('groq_api_key', 'Groq API key (or GROQ_API_KEY in .env)', { type: 'password' })}${f('groq_model', 'Model', { type: 'select', options: { 'openai/gpt-oss-120b': 'openai/gpt-oss-120b (best writing)', 'openai/gpt-oss-20b': 'openai/gpt-oss-20b (faster, higher free limits)', 'qwen/qwen3.8-27b': 'qwen/qwen3.8-27b' } })}</div>
       <div class="row">${testBtn('ai', 'Test AI', 'test-ai')}<a href="https://console.groq.com/keys" target="_blank" rel="noopener" class="small-t">Get a free key →</a></div></div>`,
   };
-  const names = { offers: 'Offers', sender: 'Sender & compliance', schedule: 'Autopilot & schedule', templates: 'Templates', ai: 'AI writing' };
+  sections.security = `<div class="grid g2" id="sec-root" data-testid="security">
+      ${params.welcome ? `<div class="alert sev-medium" style="grid-column:1/-1">${ic('shield')}<div class="grow"><strong>Your account is ready.</strong> Turn on two-factor authentication below to finish securing it.</div></div>` : ''}
+      <div class="card"><div class="card-head"><h2>${ic('shield')}Two-factor authentication</h2><span id="tfa-badge"></span></div><div id="sec-2fa" data-testid="sec-2fa"><span class="muted">Loading…</span></div></div>
+      <div class="card"><h2>Password</h2><div class="field"><label for="pw-cur">Current password</label><input type="password" id="pw-cur" autocomplete="current-password"></div>
+        <div class="field"><label for="pw-new">New password (10+ characters, letters and a number)</label><input type="password" id="pw-new" autocomplete="new-password"></div>
+        <button type="button" id="pw-save" data-testid="pw-save">${ic('check')}Change password</button></div>
+      <div class="card" style="grid-column:1/-1"><div class="card-head"><h2>${ic('users')}People in this workspace</h2><span id="signup-toggle"></span></div><div id="sec-users"></div></div></div>`;
+  const names = { offers: 'Offers', sender: 'Sender & compliance', schedule: 'Autopilot & schedule', templates: 'Templates', ai: 'AI writing', security: 'Security' };
   const tab = sections[params.tab] ? params.tab : 'offers';
   app.innerHTML = `${head('Settings', 'Offers, compliance, sending schedule, templates and AI writing. Connections live in Integrations. Everything is stored only in your local database.')}
     <div class="tabs" id="set-tabs">${Object.keys(sections).map((k) => `<button type="button" data-t="${k}" class="${k === tab ? 'active' : ''}" data-testid="settings-tab-${k}">${names[k]}</button>`).join('')}<a href="#/integrations" data-testid="settings-tab-integrations">Integrations ↗</a></div>
@@ -1168,24 +1187,15 @@ async function renderSettings({ params = {} } = {}) {
     if (!$('[name="warmup_enabled"]')?.checked || !stepN) { el.textContent = `Always ${base} emails per day.`; return; }
     const parts = [`Days 1–${hold}: ${base}/day`]; let day = hold + 1; let lvl = base;
     while (lvl < max && parts.length < 8) { lvl = Math.min(max, lvl + stepN); const to = lvl >= max ? '' : `–${day + every - 1}`; parts.push(`day${to ? 's' : ''} ${day}${to}: ${lvl}${lvl >= max ? '/day from then on' : ''}`); day += every; }
-    const rounds = Math.max(1, v('send_rounds') || 1);
-    el.textContent = `${parts.join(' · ')}. Each day is split into ${rounds} round${rounds > 1 ? 's' : ''}, ${v('min_minutes_between_sends')}–${Math.max(v('min_minutes_between_sends'), v('max_minutes_between_sends'))} minutes between emails. If more than 3% bounce, it drops back to ${base}/day until that improves.`;
+    const spread = $('[name="send_spread"]')?.checked;
+    const hours = Math.max(1, v('send_window_end') - v('send_window_start'));
+    el.textContent = `${parts.join(' · ')}. ${spread ? `Emails go out at random times over ${hours} hours — mostly ${v('min_minutes_between_sends')}–${Math.round(v('min_minutes_between_sends') + (v('max_minutes_between_sends') - v('min_minutes_between_sends')) * 0.35)} minutes apart, sometimes up to ${v('max_minutes_between_sends')}, with a few longer breaks.` : `Emails go out from the window start, ${v('min_minutes_between_sends')}–${v('max_minutes_between_sends')} minutes apart.`} If more than 3% bounce, it drops back to ${base}/day until that improves.`;
   };
-  ['daily_send_limit', 'warmup_enabled', 'warmup_hold_days', 'warmup_step', 'warmup_every_days', 'warmup_max', 'send_rounds', 'min_minutes_between_sends', 'max_minutes_between_sends']
+  ['daily_send_limit', 'warmup_enabled', 'warmup_hold_days', 'warmup_step', 'warmup_every_days', 'warmup_max', 'send_spread', 'send_window_start', 'send_window_end', 'min_minutes_between_sends', 'max_minutes_between_sends']
     .forEach((k) => $(`[name="${k}"]`)?.addEventListener('input', warmPreview));
   warmPreview();
   wireIntegrations();
-  const lp = $('#logo-prev');
-  if (lp) {
-    fetch('/brand/logo', { method: 'HEAD' }).then((r) => { if (r.ok) lp.innerHTML = `<img src="/brand/logo?${Date.now()}" class="logo-img" alt="Logo">`; });
-    $('#logo-file').onchange = (e) => {
-      const file = e.target.files[0]; if (!file) return;
-      const rd = new FileReader();
-      rd.onload = () => act(null, () => POST('/brand/logo', { dataUrl: rd.result }), 'Logo saved').then((r) => { if (r) { loadBrand(); route(); } });
-      rd.readAsDataURL(file);
-    };
-    $('#logo-remove').onclick = (e) => act(e.currentTarget, () => api('DELETE', '/brand/logo'), 'Logo removed').then((r) => { if (r) { loadBrand(); route(); } });
-  }
+  wireSecurity(params);
 }
 
 /** Test buttons save the form first; mailbox status/test email. Shared by Settings and Integrations. */
@@ -1357,21 +1367,79 @@ async function renderIntegrations() {
   wireIntegrations();
 }
 
+// ---------------------------------------------------------------- security (2FA, password, people)
+async function wireSecurity(params = {}) {
+  const box = $('#sec-2fa'); if (!box) return;
+  const st = await GET('/auth/status').catch(() => ({ enabled: false }));
+  if (!st.enabled) { $('#sec-root').innerHTML = `<div class="card" style="grid-column:1/-1">${empty('Sign-in is turned off on this server', ' — set AUTH_ENABLED=1 (the default) to require accounts and 2FA.')}</div>`; return; }
+  const { user, users } = await GET('/auth/me');
+  const draw2fa = () => {
+    $('#tfa-badge').innerHTML = user.twoFactor ? badge('ok', 'On') : badge('warn', 'Off');
+    box.innerHTML = user.twoFactor
+      ? `<p class="sub" style="margin:0 0 14px">Signing in needs your password <strong>and</strong> a code from your authenticator app.</p>
+         <details><summary class="small-t">Turn off two-factor authentication</summary><div class="mt"><div class="grid g2"><div class="field"><label>Password</label><input type="password" id="tfa-off-pass" autocomplete="current-password"></div><div class="field"><label>Current code</label><input id="tfa-off-code" inputmode="numeric" maxlength="6"></div></div>
+         <button type="button" class="danger" id="tfa-off" data-testid="2fa-disable">Turn off 2FA</button></div></details>`
+      : `<p class="sub" style="margin:0 0 14px">Add a second step to signing in: a 6-digit code from Google Authenticator, 1Password, Authy or a similar app.</p>
+         <button type="button" class="primary" id="tfa-start" data-testid="2fa-start">${ic('shield')}Turn on two-factor authentication</button>`;
+    if ($('#tfa-start')) $('#tfa-start').onclick = (e) => act(e.currentTarget, () => POST('/auth/2fa/start')).then((r) => {
+      if (!r) return;
+      box.innerHTML = `<div class="qr-box"><div class="qr" data-testid="2fa-qr">${r.qrSvg}</div><div><ol class="steps"><li>Scan the QR code with your authenticator app.</li><li>Can't scan? Enter this key: <div class="secret mt" data-testid="2fa-secret">${esc(r.secret)}</div></li><li>Type the 6-digit code it shows:</li></ol>
+        <div class="row"><input id="tfa-code" inputmode="numeric" maxlength="6" placeholder="123456" style="max-width:160px" data-testid="2fa-code"><button type="button" class="primary" id="tfa-verify" data-testid="2fa-verify">Verify &amp; turn on</button></div></div></div>`;
+      $('#tfa-verify').onclick = (ev) => act(ev.currentTarget, () => POST('/auth/2fa/enable', { code: $('#tfa-code').value }), 'Two-factor authentication is on').then((res) => {
+        if (!res) return;
+        user.twoFactor = true;
+        $('#tfa-badge').innerHTML = badge('ok', 'On');
+        box.innerHTML = `<div class="alert sev-high">${ic('alert')}<div class="grow"><strong>Save these recovery codes now.</strong> Each one signs you in once if you lose your phone. They will not be shown again.</div></div>
+          <div class="codes" data-testid="recovery-codes">${res.recoveryCodes.map((c) => `<span>${esc(c)}</span>`).join('')}</div>
+          <div class="row"><button type="button" id="codes-copy">Copy codes</button><button type="button" class="primary" id="codes-done">I saved them</button></div>`;
+        $('#codes-copy').onclick = () => navigator.clipboard?.writeText(res.recoveryCodes.join('\n')).then(() => toast('Copied'));
+        $('#codes-done').onclick = draw2fa;
+      });
+    });
+    if ($('#tfa-off')) $('#tfa-off').onclick = (e) => act(e.currentTarget, () => POST('/auth/2fa/disable', { password: $('#tfa-off-pass').value, code: $('#tfa-off-code').value }), 'Two-factor authentication is off').then((r) => { if (r) { user.twoFactor = false; draw2fa(); } });
+  };
+  draw2fa();
+  $('#pw-save').onclick = (e) => act(e.currentTarget, () => POST('/auth/password', { current: $('#pw-cur').value, next: $('#pw-new').value }), 'Password changed').then((r) => { if (r) { $('#pw-cur').value = ''; $('#pw-new').value = ''; } });
+  const owner = user.role === 'owner';
+  $('#signup-toggle').innerHTML = owner ? `<label class="check" style="margin:0"><input type="checkbox" id="signups" ${st.signupsOpen ? 'checked' : ''} data-testid="signups-toggle"> <span>Let people create an account (they share this workspace)</span></label>` : '';
+  if ($('#signups')) $('#signups').onchange = (e) => act(null, () => api('PUT', '/auth/signups', { open: e.target.checked }), e.target.checked ? 'Sign-ups open — share /signup with your team' : 'Sign-ups closed');
+  $('#sec-users').innerHTML = `<div class="table-wrap"><table data-testid="users-table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>2FA</th><th>Last sign-in</th><th></th></tr></thead><tbody>
+    ${users.map((u) => `<tr><td class="cell-title">${esc(u.name)}${u.id === user.id ? ' <span class="muted small-t">(you)</span>' : ''}</td><td>${esc(u.email)}</td><td>${esc(u.role)}</td><td>${u.twoFactor ? badge('ok', 'On') : badge('warn', 'Off')}</td><td class="cell-sub">${fmtDate(u.lastLoginAt)}</td>
+      <td class="num">${owner && u.id !== user.id ? `<button type="button" class="small danger rm-user" data-id="${u.id}">Remove</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+  $$('.rm-user').forEach((b) => { b.onclick = (e) => { if (!confirm('Remove this person? They will be signed out.')) return; act(e.currentTarget, () => api('DELETE', `/auth/users/${b.dataset.id}`), 'Removed').then((r) => r && route()); }; });
+}
+
 // ---------------------------------------------------------------- brand & greeting
-/** Your logo and company name in the sidebar; greeting in the top bar. */
+/** Greeting in the top bar, and the signed-in user's menu. */
 function loadBrand() {
-  GET('/settings').then((s) => {
-    $('#brand-name').textContent = s.sender_company || 'ProspectLoom';
-    $('#brand-sub').textContent = s.sender_company ? 'ProspectLoom' : 'Leads & outreach';
+  GET('/settings').then((st) => {
     const h = new Date().getHours();
-    const first = String(s.sender_name || '').split(' ')[0];
+    const first = String(st.sender_name || '').split(' ')[0];
     $('#greet').innerHTML = `${h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'}${first ? `, <strong>${esc(first)}</strong>` : ''} · ${new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}`;
   }).catch(() => {});
-  fetch('/brand/logo', { method: 'HEAD' }).then((r) => {
-    const mark = $('#brand-mark');
-    if (r.ok) mark.outerHTML = `<img src="/brand/logo?${Date.now()}" class="logo-img" id="brand-mark" alt="">`;
-    else if (mark.tagName === 'IMG') mark.outerHTML = '<span class="logo" id="brand-mark">PL</span>';
+  GET('/auth/status').then((st) => {
+    if (!st.enabled || !st.user) return;
+    const u = st.user;
+    $('#user-menu').hidden = false;
+    $('#user-btn').textContent = (u.name || u.email).split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((x) => x[0].toUpperCase()).join('');
+    $('#um-name').textContent = u.name || u.email; $('#um-email').textContent = u.email;
+    $('#user-btn').onclick = (e) => { e.stopPropagation(); $('#user-pop').hidden = !$('#user-pop').hidden; };
+    document.addEventListener('click', (e) => { if (!$('#user-menu').contains(e.target)) $('#user-pop').hidden = true; });
+    $('#um-logout').onclick = () => POST('/auth/logout').finally(() => { location.href = '/login'; });
   }).catch(() => {});
+}
+
+/** Reload by itself when the app's files change (an open tab never keeps running an old version). */
+async function watchVersion() {
+  let v0 = null;
+  try { v0 = (await GET('/version')).v; } catch { return; }
+  setInterval(async () => {
+    try {
+      const { v } = await GET('/version');
+      const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
+      if (v !== v0 && !typing && $('#modal').hidden) { toast('ProspectLoom was updated — reloading…'); setTimeout(() => location.reload(), 1200); v0 = v; }
+    } catch { /* offline */ }
+  }, 60_000);
 }
 
 // ---------------------------------------------------------------- boot
@@ -1389,4 +1457,5 @@ function loadBrand() {
   if (META.testMode) $('#mode-badge').innerHTML = '<span class="badge b-warn">TEST MODE — emails captured, not sent</span>';
   route();
   pollJobs();
+  watchVersion();
 })();

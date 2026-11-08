@@ -222,22 +222,31 @@ test('mailbox errors are explained in plain words', () => {
 const ob = await import('../../src/services/outreach.js');
 const { setSetting } = await import('../../src/lib/settings.js');
 
-test('send plan: 10 emails in 2 rounds → 5 at window start + 5 in the afternoon; nothing before the first round', () => {
-  setSetting('send_timezone', 'America/New_York');
-  setSetting('daily_send_limit', '10'); setSetting('send_rounds', '2'); setSetting('send_window_start', '9'); setSetting('send_window_end', '17');
-  setSetting('warmup_enabled', '0');
+test('send times: random human-like gaps across the 6-hour window, stable for the day, different every day', () => {
+  setSetting('send_timezone', 'America/New_York'); setSetting('warmup_enabled', '0'); setSetting('daily_send_limit', '10');
+  setSetting('send_window_start', '9'); setSetting('send_window_end', '15'); setSetting('send_spread', '1');
+  setSetting('min_minutes_between_sends', '2'); setSetting('max_minutes_between_sends', '20');
   const at = (h, m = 0) => new Date(Date.UTC(2026, 10, 9, h + 5, m)); // Mon 9 Nov 2026, New York = UTC-5
-  const p10 = ob.sendPlan(at(10));
-  assert.deepEqual(p10.rounds.map((r) => r.count), [5, 5]);
-  assert.equal(p10.rounds[0].at, '09:00');
-  assert.ok(p10.rounds[1].atMin >= 13 * 60 && p10.rounds[1].atMin <= 13 * 60 + 40);
-  assert.equal(p10.current, 1); assert.equal(p10.allowedNow, 5);
-  assert.equal(ob.sendPlan(at(8)).current, 0);
-  assert.equal(ob.sendPlan(at(14)).allowedNow, 10);
-  assert.deepEqual(ob.sendPlan(at(10)).rounds, p10.rounds, 'stable within a day');
-  setSetting('send_rounds', '3');
-  assert.deepEqual(ob.sendPlan(at(10)).rounds.map((r) => r.count), [3, 3, 4]);
-  setSetting('send_rounds', '2');
+  const p = ob.sendPlan(at(10));
+  assert.equal(p.slots.length, 10);
+  const mins = p.slots.map((x) => x.atMin);
+  assert.ok(mins[0] >= 540 && mins[9] <= 900, 'inside 09:00–15:00');
+  assert.ok(mins[9] >= 540 + 360 * 0.8, 'uses most of the window');
+  const gaps = mins.slice(1).map((m, i) => m - mins[i]);
+  assert.ok(gaps.every((g) => g >= 2), 'never closer than the shortest gap');
+  assert.ok(Math.min(...gaps) < 20 && Math.max(...gaps) > 40, 'short bursts and longer breaks');
+  assert.ok(Math.max(...gaps) <= 140, 'no break is absurdly long');
+  assert.deepEqual(ob.sendPlan(at(12)).slots.map((x) => x.at), p.slots.map((x) => x.at), 'stable within a day');
+  assert.notDeepEqual(ob.sendPlan(new Date(Date.UTC(2026, 10, 10, 15))).slots.map((x) => x.at), p.slots.map((x) => x.at), 'different every day');
+  assert.equal(ob.sendPlan(at(8)).due, 0, 'nothing before the window');
+  assert.equal(ob.sendPlan(at(15, 30)).due, 10);
+  setSetting('daily_send_limit', '40');
+  const p40 = ob.sendPlan(at(10));
+  assert.equal(p40.slots.length, 40);
+  assert.ok(p40.slots[39].atMin <= 900, '40 a day still fits the window');
+  setSetting('send_spread', '0');
+  assert.equal(ob.sendPlan(at(10)).due, 40, 'spread off: all due from the window start');
+  setSetting('send_spread', '1'); setSetting('daily_send_limit', '10');
 });
 
 test('random gap stays within the configured range', () => {

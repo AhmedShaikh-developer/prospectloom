@@ -11,10 +11,13 @@ import { unsubscribeByToken } from './services/outreach.js';
 import { getSetting } from './lib/settings.js';
 import { startScheduler } from './services/scheduler.js';
 import { recoverJobs } from './services/jobs.js';
+import { authRouter } from './routes/auth.js';
+import * as auth from './services/auth.js';
 
 getDb();
 const app = express();
 app.disable('x-powered-by');
+app.set('trust proxy', 'loopback'); // behind nginx on the same server: real client IP + https detection
 app.use(express.json({ limit: '25mb' }));
 
 // Public endpoints (no dashboard auth): unsubscribe links and the Clay webhook.
@@ -35,41 +38,28 @@ app.post('/hooks/clay', (req, res) => {
   try { res.json(handleClayWebhook(req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// Optional password for the dashboard (recommended if PUBLIC_BASE_URL exposes the app).
-if (config.dashboardPassword) {
-  app.use((req, res, next) => {
-    const [, b64] = String(req.get('authorization') || '').split(' ');
-    const pass = b64 ? Buffer.from(b64, 'base64').toString().split(':').slice(1).join(':') : '';
-    if (pass === config.dashboardPassword) return next();
-    res.set('WWW-Authenticate', 'Basic realm="ProspectLoom"').status(401).send('Authentication required');
-  });
-}
+// ---------------------------------------------------------------- sign-in
+// Public: the sign-in pages and their assets, the auth API, unsubscribe links (above) and the Clay webhook (above).
+app.use('/api/auth', authRouter);
+if (config.testMode) app.post('/__test/auth', (req, res) => { auth.setEnabled(!!req.body?.enabled); res.json({ enabled: auth.isEnabled() }); });
+const PUBLIC_FILES = new Set(['/styles.css', '/logo.svg', '/auth.js', '/login.html']);
+app.get(['/login', '/signup'], (req, res) => res.sendFile(path.join(ROOT, 'public', 'login.html')));
+app.use((req, res, next) => {
+  if (!auth.isEnabled() || PUBLIC_FILES.has(req.path)) return next();
+  const user = auth.sessionUser(auth.readCookie(req));
+  if (user) { req.user = user; return next(); }
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Sign in required', signIn: true });
+  return res.redirect('/login');
+});
 
-// Your company logo lives next to your data (private, never in the code repository).
-const brandDir = path.join(path.dirname(config.dbPath), 'brand');
-const LOGO_FILES = ['logo.png', 'logo.jpg', 'logo.webp', 'logo.svg'];
-app.get('/brand/logo', (req, res) => {
-  const f = LOGO_FILES.map((x) => path.join(brandDir, x)).find((p) => fs.existsSync(p));
-  if (!f) return res.status(404).end();
-  res.set('Cache-Control', 'no-cache').sendFile(f);
-});
-app.post('/api/brand/logo', (req, res) => {
-  const m = String(req.body?.dataUrl || '').match(/^data:image\/(png|jpe?g|webp|svg\+xml);base64,(.+)$/);
-  if (!m) return res.status(400).json({ error: 'Choose a PNG, JPG, WebP or SVG image' });
-  const ext = { png: 'png', jpg: 'jpg', jpeg: 'jpg', webp: 'webp', 'svg+xml': 'svg' }[m[1]];
-  const buf = Buffer.from(m[2], 'base64');
-  if (buf.length > 3 * 1024 * 1024) return res.status(400).json({ error: 'Logo must be under 3 MB' });
-  fs.mkdirSync(brandDir, { recursive: true });
-  for (const x of LOGO_FILES) fs.rmSync(path.join(brandDir, x), { force: true });
-  fs.writeFileSync(path.join(brandDir, `logo.${ext}`), buf);
-  res.json({ ok: true });
-});
-app.delete('/api/brand/logo', (req, res) => {
-  for (const x of LOGO_FILES) fs.rmSync(path.join(brandDir, x), { force: true });
-  res.json({ ok: true });
+// The app reloads itself when its files change (so an open tab never runs an old version).
+const PUBLIC_DIR = path.join(ROOT, 'public');
+app.get('/api/version', (req, res) => {
+  const v = fs.readdirSync(PUBLIC_DIR).reduce((m, f) => Math.max(m, fs.statSync(path.join(PUBLIC_DIR, f)).mtimeMs), 0);
+  res.json({ v: String(Math.round(v)) });
 });
 app.use('/api', api);
-app.use(express.static(path.join(ROOT, 'public')));
+app.use(express.static(PUBLIC_DIR, { setHeaders: (res) => res.set('Cache-Control', 'no-cache') }));
 app.get('*', (req, res) => res.sendFile(path.join(ROOT, 'public', 'index.html')));
 
 recoverJobs();

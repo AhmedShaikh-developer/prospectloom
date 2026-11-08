@@ -55,11 +55,11 @@ export const DEFAULT_SETTINGS = {
   // Phase 8/9: volume and schedule
   daily_send_limit: '10',
   send_window_start: '9',     // hour, local time of the server
-  send_window_end: '16',
+  send_window_end: '15',
   send_days: '1,2,3,4,5',     // Mon-Fri
-  min_minutes_between_sends: '6',   // random gap between emails: from…
-  max_minutes_between_sends: '14',  // …to (minutes)
-  send_rounds: '2',                 // split each day's emails into rounds (10 → 5 + 5)
+  min_minutes_between_sends: '2',   // shortest gap between two emails (minutes)
+  max_minutes_between_sends: '20',  // usual longest gap; a few longer breaks are added to fill the window
+  send_spread: '1',                 // 1 = random, human-like send times across the whole window
   // Warm-up: start at daily_send_limit, hold for N days, then grow step-by-step up to the maximum.
   warmup_enabled: '1',
   warmup_hold_days: '14',
@@ -100,7 +100,8 @@ export const DEFAULT_SETTINGS = {
   ai_writing: '1',
   groq_model: 'openai/gpt-oss-120b',
   writing_style_example: '',   // optional: an email you wrote yourself; the AI copies its tone, never its content
-  autopilot_review: '0',       // 1 = autopilot writes, you approve each email before it can be sent
+  autopilot_review: '0',
+  allow_signups: '0',           // 1 = people can create an account on the sign-up page (they share this workspace)       // 1 = autopilot writes, you approve each email before it can be sent
 
   // Templates (Phase 9). Variables: {{first_name}} {{company}} {{personalization}} {{offer_pitch}} {{sender_name}} ...
   template_a_subject: 'idea for {{company}}',

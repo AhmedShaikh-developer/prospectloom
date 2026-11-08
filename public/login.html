@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · ProspectLoom</title>
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap">
+  <link rel="stylesheet" href="/styles.css">
+  <script>
+    (function () {
+      var t = null; try { t = localStorage.getItem('pl-theme'); } catch (e) {}
+      if (t !== 'light' && t !== 'dark') t = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+</head>
+<body class="auth-page">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol></svg>
+  <div class="auth">
+    <aside class="auth-hero">
+      <div class="auth-brand"><img src="/logo.svg" alt="" width="42" height="42"><span>ProspectLoom</span></div>
+      <div class="auth-pitch">
+        <h1>Personal outreach,<br>on autopilot.</h1>
+        <p>Finds leads around the clock, reads every company's own website, and sends a few plain, human emails a day from your own mailbox.</p>
+        <ul>
+          <li><b>24/7 lead engine</b> — map listings, CSVs, Apollo, Hunter, HubSpot</li>
+          <li><b>Human-paced sending</b> — random gaps, automatic warm-up</li>
+          <li><b>Safe by default</b> — no guessed emails, opt-outs always honoured</li>
+        </ul>
+      </div>
+      <div class="auth-foot">Secured with two-factor authentication</div>
+    </aside>
+    <main class="auth-main">
+      <div class="auth-card" id="auth-card" data-testid="auth-card">
+        <div class="auth-brand mobile"><img src="/logo.svg" alt="" width="36" height="36"><span>ProspectLoom</span></div>
+
+        <form id="f-login" data-testid="form-login" hidden>
+          <h2 class="auth-title">Welcome back</h2>
+          <p class="auth-sub">Sign in to your workspace.</p>
+          <div class="field"><label for="li-email">Email</label><input id="li-email" name="email" type="email" autocomplete="username" required data-testid="login-email"></div>
+          <div class="field"><label for="li-pass">Password</label><input id="li-pass" name="password" type="password" autocomplete="current-password" required data-testid="login-password"></div>
+          <button class="primary wide" data-testid="login-submit">Sign in</button>
+          <p class="auth-alt" id="to-signup">No account yet? <a href="/signup">Create one</a></p>
+        </form>
+
+        <form id="f-2fa" data-testid="form-2fa" hidden>
+          <div class="auth-icon"><svg class="i" style="width:26px;height:26px"><use href="#i-lock"/></svg></div>
+          <h2 class="auth-title">Two-factor check</h2>
+          <p class="auth-sub">Enter the 6-digit code from your authenticator app — or one of your recovery codes.</p>
+          <div class="field"><input id="tf-code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="9" placeholder="123 456" class="code-input" required data-testid="login-code"></div>
+          <button class="primary wide" data-testid="login-code-submit">Verify</button>
+          <p class="auth-alt"><a href="/login">Use a different account</a></p>
+        </form>
+
+        <form id="f-signup" data-testid="form-signup" hidden>
+          <h2 class="auth-title" id="su-title">Create your account</h2>
+          <p class="auth-sub" id="su-sub">It takes a minute. You can turn on two-factor authentication right after.</p>
+          <div class="field"><label for="su-name">Your name</label><input id="su-name" name="name" autocomplete="name" required data-testid="signup-name"></div>
+          <div class="field"><label for="su-email">Email</label><input id="su-email" name="email" type="email" autocomplete="username" required data-testid="signup-email"></div>
+          <div class="field"><label for="su-pass">Password</label><input id="su-pass" name="password" type="password" autocomplete="new-password" minlength="10" required data-testid="signup-password">
+            <div class="pw-meter"><span id="pw-bar"></span></div><div class="small-t muted" id="pw-hint">At least 10 characters, with letters and a number.</div></div>
+          <button class="primary wide" data-testid="signup-submit">Create account</button>
+          <p class="auth-alt">Already have an account? <a href="/login">Sign in</a></p>
+        </form>
+
+        <div id="closed" hidden data-testid="signups-closed">
+          <h2 class="auth-title">Sign-ups are closed</h2>
+          <p class="auth-sub">This workspace is private. Ask the owner to open sign-ups for you, then come back.</p>
+          <a class="btn primary wide" href="/login">Back to sign in</a>
+        </div>
+
+        <div class="auth-err" id="auth-err" role="alert" data-testid="auth-error" hidden></div>
+      </div>
+      <button class="icon-btn auth-theme" id="theme-toggle" title="Switch dark / light" aria-label="Switch dark / light theme">◐</button>
+    </main>
+  </div>
+  <script type="module" src="/auth.js"></script>
+</body>
+</html>

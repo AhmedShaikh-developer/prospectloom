@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ProspectLoom</title>
-  <link rel="icon" href="/brand/logo">
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap">
@@ -53,7 +53,7 @@
   </svg>
   <div class="layout">
     <aside class="sidebar" data-testid="sidebar">
-      <div class="brand"><span class="logo" id="brand-mark">PL</span><div><strong id="brand-name">ProspectLoom</strong><small id="brand-sub">Leads &amp; outreach</small></div></div>
+      <div class="brand"><img src="/logo.svg" class="logo-svg" id="brand-mark" alt="ProspectLoom" width="40" height="40"><div><strong id="brand-name">ProspectLoom</strong><small id="brand-sub">Outreach autopilot</small></div></div>
       <nav>
         <a href="#/dashboard" data-nav="dashboard"><svg class="i"><use href="#i-home"/></svg>Dashboard</a>
         <div class="nav-group">Leads</div>
@@ -80,6 +80,10 @@
         <div class="spacer"></div>
         <a class="btn icon-btn" href="#/replies" title="Replies" aria-label="Replies"><svg class="i"><use href="#i-bell"/></svg><span class="dot" id="bell-dot" hidden></span></a>
         <button class="icon-btn" id="theme-toggle" data-testid="theme-toggle" title="Switch dark / light" aria-label="Switch dark / light theme"><svg class="i theme-ico-moon"><use href="#i-moon"/></svg><svg class="i theme-ico-sun"><use href="#i-sun"/></svg></button>
+        <div class="user-menu" id="user-menu" hidden><button class="avatar" id="user-btn" data-testid="user-menu" aria-haspopup="true" aria-label="Account"></button>
+          <div class="menu" id="user-pop" hidden><div class="menu-h"><strong id="um-name"></strong><span id="um-email"></span></div>
+            <a href="#/settings?tab=security"><svg class="i"><use href="#i-shield"/></svg>Security &amp; 2FA</a>
+            <button type="button" id="um-logout" data-testid="sign-out"><svg class="i"><use href="#i-back"/></svg>Sign out</button></div></div>
       </header>
       <main id="app" tabindex="-1"></main>
     </div>

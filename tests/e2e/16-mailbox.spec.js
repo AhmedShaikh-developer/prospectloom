@@ -7,7 +7,7 @@ test.describe.serial('Hostinger mailbox', () => {
   test.beforeAll(async ({ request }) => {
     await ensureCompliance(request);
     await api(request, 'PUT', '/settings', {
-      daily_send_limit: '200', send_days: '0,1,2,3,4,5,6', send_window_start: '0', send_window_end: '24', min_minutes_between_sends: '0', max_minutes_between_sends: '0', send_rounds: '1',
+      daily_send_limit: '200', send_days: '0,1,2,3,4,5,6', send_window_start: '0', send_window_end: '24', min_minutes_between_sends: '0', max_minutes_between_sends: '0', send_spread: '0',
     });
   });
   test.afterAll(async ({ request }) => {

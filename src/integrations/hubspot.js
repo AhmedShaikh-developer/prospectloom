@@ -23,7 +23,11 @@ async function call(method, path, body) {
     const text = await res.text();
     let data; try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
     if (!res.ok) {
-      const err = new Error(`HubSpot ${method} ${path} → ${res.status}: ${data.message || text.slice(0, 200)}`);
+      const friendly = {
+        401: 'HubSpot rejected the key. In HubSpot create a service key (or private app) with the crm.objects.companies.read scope and paste its access token — it starts with "pat-".',
+        403: `HubSpot says this key is missing a permission (scope) for ${path.split('?')[0]} — add the scope to the key and paste it again.`,
+      }[res.status];
+      const err = new Error(friendly || `HubSpot ${method} ${path.split('?')[0]} → ${res.status}: ${String(data.message || text).slice(0, 200)}`);
       err.status = res.status; err.data = data;
       if (res.status === 401) err.kind = 'auth';
       else if (res.status === 403) err.kind = 'plan';

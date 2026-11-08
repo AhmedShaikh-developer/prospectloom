@@ -233,47 +233,94 @@ export function quotaStatus(d = new Date()) {
   return { limit, sent, remaining: Math.max(0, limit - sent) };
 }
 
-// ---------------------------------------------------------------- rounds: spread the day's emails out
-// Deterministic per day, so a restart never changes today's plan.
+// ---------------------------------------------------------------- human-like send times
+// Deterministic per day (seeded by date + limit + window), so a restart never reshuffles today's plan.
 function seeded(key, i) {
   let h = 2166136261;
   for (const ch of `${key}#${i}`) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
   return ((h >>> 0) % 10000) / 10000;
 }
+function rng(key) {
+  let a = 0; for (const ch of key) a = (Math.imul(a ^ ch.charCodeAt(0), 2654435761) + 0x9e3779b9) | 0;
+  return () => { a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
 const hhmm = (min) => `${String(Math.floor(min / 60) % 24).padStart(2, '0')}:${String(Math.floor(min % 60)).padStart(2, '0')}`;
 
 /**
- * Today's sending plan: the limit is split into N rounds spread across the send window
- * (e.g. 10 → 5 at 09:00 and 5 at ~12:40), with a random gap between emails inside a round.
+ * Today's send times, spread across the window like a person working through a list:
+ * mostly 2–8 minutes apart, sometimes 8–20, now and then 20–35, plus 1–3 longer breaks so the
+ * day's emails stretch over the whole window (finishing in its last 5–15%).
+ * With "spread" off, every email is due at the window start and only the min/max gap applies.
  */
-export function sendPlan(d = new Date()) {
+export function sendSchedule(d = new Date()) {
   const { limit } = quotaStatus(d);
   const clock = zonedClock(d);
   const start = getNum('send_window_start') * 60;
   const end = Math.max(start + 60, getNum('send_window_end') * 60);
-  const n = Math.min(6, Math.max(1, getNum('send_rounds') || 1, 1));
-  const rounds = Math.min(n, limit);
-  const slot = (end - start) / rounds;
-  const list = [];
-  for (let i = 0; i < rounds; i++) {
-    const jitter = i === 0 ? 0 : Math.round(seeded(clock.key, i) * Math.min(40, slot * 0.3));
-    const at = Math.round(start + i * slot + jitter);
-    const upto = Math.floor((limit * (i + 1)) / rounds);
-    list.push({ round: i + 1, at: hhmm(at), atMin: at, count: upto - (list.length ? list[list.length - 1].upto : 0), upto });
+  const span = end - start;
+  const lo = Math.max(1, getNum('min_minutes_between_sends') || 2);
+  const hi = Math.max(lo + 2, getNum('max_minutes_between_sends') || 20);
+  if (!getBool('send_spread')) return { spread: false, start, end, slots: Array.from({ length: limit }, () => start) };
+  const r = rng(`${clock.key}|${limit}|${start}|${end}|${lo}|${hi}`);
+  const between = (x, y) => x + r() * (y - x);
+  const mid = lo + (hi - lo) * 0.35;
+  const gaps = [];
+  for (let i = 1; i < limit; i++) {
+    const x = r();
+    gaps.push(x < 0.55 ? between(lo, mid) : x < 0.88 ? between(mid, hi) : between(hi, hi * 1.75));
   }
-  const now = clock.hour * 60 + clock.minute;
-  let current = -1;
-  list.forEach((r, i) => { if (now >= r.atMin) current = i; });
-  const sent = sentToday(d);
-  const next = list.find((r) => r.atMin > now) || null;
-  return { limit, sent, rounds: list, current: current + 1, allowedNow: current >= 0 ? list[current].upto : 0, nextRound: next ? next.at : null, timezone: getSetting('send_timezone'), nowMin: now };
+  let first = between(0, Math.min(20, span * 0.08));
+  const used = first + gaps.reduce((t, g) => t + g, 0);
+  const target = span * between(0.85, 0.95);
+  if (used < target && gaps.length) {
+    // 2–4 breaks (coffee, a call, lunch — at most ~95 min each) take most of the spare time;
+    // the remaining gaps stretch a little, so short bursts stay short.
+    const spare = target - used;
+    const k = Math.min(gaps.length, 2 + Math.floor(r() * 3));
+    const idx = new Set(); while (idx.size < k) idx.add(Math.floor(r() * gaps.length));
+    const w = [...idx].map(() => 0.6 + r()); const wsum = w.reduce((t, x) => t + x, 0);
+    let given = 0;
+    [...idx].forEach((gi, j) => { const add = Math.min(95, (spare * 0.7 * w[j]) / wsum); gaps[gi] += add; given += add; });
+    const others = gaps.map((g, i) => (idx.has(i) ? 0 : g)); const osum = others.reduce((t, g) => t + g, 0);
+    const rest = spare - given;
+    if (osum > 0) gaps.forEach((g, i) => { if (!idx.has(i)) gaps[i] = g + (rest * g) / osum; });
+    else [...idx].forEach((gi) => { gaps[gi] += rest / k; });
+  } else if (used > span - 2) {
+    // more emails than comfortably fit: compress evenly, keeping the shape of the gaps
+    const f = (span - 2) / used; first *= f; for (let i = 0; i < gaps.length; i++) gaps[i] *= f;
+  }
+  const slots = [start + first];
+  for (const g of gaps) slots.push(slots[slots.length - 1] + g);
+  return { spread: true, start, end, slots };
 }
 
-/** Gap before the k-th email of the day: random between the min and max minutes (stable per day). */
+/** Today's plan for the dashboard and the scheduler: every send time, how many are due, the next one. */
+export function sendPlan(d = new Date()) {
+  const { limit } = quotaStatus(d);
+  const sch = sendSchedule(d);
+  const clock = zonedClock(d);
+  const now = clock.hour * 60 + clock.minute + clock.second / 60;
+  const sent = sentToday(d);
+  const due = sch.slots.filter((m) => m <= now).length;
+  const nextIdx = Math.max(sent, due);
+  const slots = sch.slots.map((m, i) => ({ i, atMin: Math.round(m * 10) / 10, at: hhmm(m), sent: i < sent }));
+  return {
+    limit, sent, due, spread: sch.spread, slots, windowStart: hhmm(sch.start), windowEnd: hhmm(sch.end),
+    next: slots[nextIdx] ? slots[nextIdx].at : null, behind: Math.max(0, due - sent), nowMin: now, timezone: getSetting('send_timezone'),
+  };
+}
+
+/** Minimum minutes between two sends: random between the min and max gap (stable per day). */
 export function gapMinutes(k, d = new Date()) {
   const lo = Math.max(0, getNum('min_minutes_between_sends'));
   const hi = Math.max(lo, getNum('max_minutes_between_sends'));
   return lo + Math.round(seeded(zonedClock(d).key, `gap${k}`) * (hi - lo));
+}
+
+/** Catch-up spacing when the app was closed or the Mac slept: never a burst — a few minutes apart. */
+function catchUpMinutes(k, d = new Date()) {
+  const lo = Math.max(1, getNum('min_minutes_between_sends') || 2);
+  return lo + Math.round(seeded(zonedClock(d).key, `catch${k}`) * 4);
 }
 
 function zonedParts(d = new Date(), tz = getSetting('send_timezone')) {
@@ -373,10 +420,11 @@ export async function autoSendTick() {
   if (!inSendWindow()) return { skipped: 'outside send window' };
   if (quotaStatus().remaining <= 0) return { skipped: 'daily limit reached' };
   const plan = sendPlan();
-  if (plan.current === 0) return { skipped: 'waiting for the first round', next: plan.rounds[0]?.at };
-  if (plan.sent >= plan.allowedNow) return { skipped: 'round complete', next: plan.nextRound };
+  if (plan.due === 0) return { skipped: 'waiting for the first send time', next: plan.slots[0]?.at };
+  if (plan.sent >= plan.due) return { skipped: 'waiting for the next send time', next: plan.next };
   const last = q.get("SELECT MAX(sent_at) AS t FROM messages WHERE status IN ('sent','bounced')").t;
-  if (last && Date.now() - new Date(last).getTime() < gapMinutes(plan.sent) * 60000) return { skipped: 'spacing' };
+  const minGap = plan.spread ? (plan.behind > 1 ? catchUpMinutes(plan.sent) : 1) : gapMinutes(plan.sent);
+  if (last && Date.now() - new Date(last).getTime() < minGap * 60000) return { skipped: 'spacing' };
   const next = q.get("SELECT id FROM messages WHERE status = 'approved' ORDER BY kind = 'follow_up' DESC, approved_at ASC LIMIT 1");
   if (!next) return { skipped: 'nothing approved' };
   return sendOne(next.id, { actor: 'scheduler' });

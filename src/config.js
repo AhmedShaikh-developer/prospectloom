@@ -25,7 +25,8 @@ export const config = {
   allowPrivateFetch: env.ALLOW_PRIVATE_FETCH === '1',
   // Tests: refuse any fetch that is not to 127.0.0.1 (no real websites are contacted).
   loopbackOnlyFetch: env.LOOPBACK_ONLY_FETCH === '1',
-  dashboardPassword: env.DASHBOARD_PASSWORD || '',
+  // Sign-in is required unless AUTH_ENABLED=0 (off by default only in the automated test server).
+  authEnabled: env.AUTH_ENABLED ? env.AUTH_ENABLED !== '0' : env.APP_MODE !== 'test',
   publicBaseUrl: env.PUBLIC_BASE_URL || '',
   // 'simple' (default): automatic research, decision-maker optional. 'strict': the original manual-evidence rules.
   pipelineMode: env.PIPELINE_MODE || 'simple',

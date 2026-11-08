@@ -50,9 +50,10 @@ test.describe('App shell, themes & charts', () => {
     expect(errors).toEqual([]);
   });
 
-  test('logo: falls back to the mark when none is uploaded', async ({ page, request }) => {
-    await request.delete('/api/brand/logo');
+  test('the product has its own logo and name (no company branding)', async ({ page }) => {
     await page.goto('/#/dashboard');
-    await expect(page.locator('#brand-mark')).toHaveText('PL');
+    await expect(page.locator('#brand-mark')).toHaveAttribute('src', '/logo.svg');
+    await expect(page.locator('#brand-name')).toHaveText('ProspectLoom');
+    expect((await page.request.get('/logo.svg')).headers()['content-type']).toContain('svg');
   });
 });

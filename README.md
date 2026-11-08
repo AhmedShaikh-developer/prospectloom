@@ -2,7 +2,7 @@
 
 Find leads around the clock, research every company from its own website, and send a few personal, human-sounding emails each day from your own mailbox. It runs locally as a dashboard and uses only free tools: OpenStreetMap for leads, Groq for writing, and any SMTP/IMAP mailbox (Hostinger is preset).
 
-find leads → research their website → one plain, personal email per lead → send in small daily rounds with a warm-up → handle replies.
+find leads → research their website → one plain, personal email per lead → send a few a day at random, human-like times with a warm-up → handle replies.
 
 B2B and B2C both work. HubSpot, Apollo and Clay are optional.
 
@@ -37,6 +37,24 @@ Requires Node 22.13+ (uses the built-in `node:sqlite`). Data lives in `data/pipe
 - **Already contacted**: paste emails or domains you emailed with other tools. Your Hostinger Sent folder is read over IMAP. Either way, those people never get a second intro.
 - **Background jobs**: searches, imports, research and autopilot run on the server. Their progress shows in the sidebar on every page, so leaving a page never loses work.
 
+## Accounts & two-factor authentication
+
+The first person to open the app creates the **owner** account. Everyone else signs in, and sign-ups stay closed unless the owner opens them in Settings → Security. Team members share the same workspace.
+
+- Passwords are hashed with scrypt. Sessions last 30 days in an HttpOnly cookie, and only their hash is stored.
+- **2FA:** Settings → Security → *Turn on two-factor authentication*. Scan the QR code with Google Authenticator, 1Password, Authy or similar, and save the 8 one-time recovery codes. The QR code is drawn locally; the secret never leaves the server.
+- After 5 wrong passwords or codes, sign-in for that account pauses for 15 minutes.
+- The unsubscribe links and the Clay webhook stay public (the webhook has its own secret).
+
+## Deploying (always-on server)
+
+The app needs a machine that runs 24/7: the scheduler sends emails, the lead engine searches, and the mailbox is read every 10 minutes. Shared web hosting can't run that. A small VPS can, for example Hostinger VPS (KVM 1) or Oracle Cloud's Always Free VM.
+
+1. Ubuntu 24.04, Node 24, nginx as an HTTPS reverse proxy (Let's Encrypt), and the app as a systemd service (`npm start`).
+2. DNS: an `A` record such as `app.yourdomain.com` pointing to the server's IP.
+3. `.env` on the server: your keys plus `PUBLIC_BASE_URL=https://app.yourdomain.com`. Copy `data/` across to keep your leads and history.
+4. Run **one** copy only. Stop the local one once the server is live, or both will send.
+
 ## Integrations (all optional)
 
 Open **Integrations** in the sidebar: every tool is one card. Fill in the fields, click **Save & test**, done.
@@ -51,7 +69,7 @@ Open **Integrations** in the sidebar: every tool is one card. Fill in the fields
 
 **Credit-aware autopilot.** Each paid source pulls leads while it can. When the provider answers "out of credits", "rate limited" or "not in your plan", the source pauses. It waits until the renewal date when the provider gives one, and otherwise checks again daily. Then it continues from where it stopped: Apollo keeps its page per keyword × city, HubSpot its paging cursor, and Hunter never looks up the same company twice. Waiting sources appear on the dashboard and in Integrations. Changing a key re-checks right away.
 
-**Look & feel.** The dark (matte) and light themes switch from the top bar and are remembered. Charts are plain SVG with hover tooltips. Your logo goes in Settings → Sender & compliance → Logo. It's stored with your data in `data/brand/`, never in the repository.
+**Look & feel.** The dark (matte) and light themes switch from the top bar and are remembered. Charts are plain SVG with hover tooltips. An open tab reloads itself when the app is updated.
 
 ## How emails are written
 
@@ -70,8 +88,8 @@ Every company's own website is read (up to 10 pages, robots.txt respected): what
    - It runs dedup and suppression, picks the offer (A, B or C), and picks an opener from a real fact on the site, with its source URL.
 2. **Autopilot** (once a day plus an hourly top-up) writes one email per READY lead with Groq, using only verified facts.
    - A quality gate rejects placeholders, links, hype and invented numbers, and falls back to your template.
-   - It approves the emails and sends them in **rounds** (default 2, so 10 → 5 at the window start + 5 around midday), with a random 6–14 minute gap between emails, inside the window and the daily limit. "Today" is the recipients' day, not your Mac's.
-   - **Warm-up** (Settings → Autopilot & schedule → Volume, rounds & warm-up): 10/day for the first 14 days after your first email, then +5 every 7 days up to 40/day. If more than 3% bounce, it drops back to the starting level. The dashboard shows today's rounds and the warm-up day.
+   - It approves the emails and sends them at **random, human-like times** across the window (default 9:00–15:00 in the recipients' timezone): mostly 2–8 minutes apart, sometimes up to 20, with 2–4 longer breaks, so the day's emails stretch over about six hours. The times are different every day, never in a burst (if the app was closed, missed emails catch up a few minutes apart). "Today" is the recipients' day, not your Mac's.
+   - **Warm-up** (Settings → Autopilot & schedule → Volume, timing & warm-up): 10/day for the first 14 days after your first email, then +5 every 7 days up to 40/day. If more than 3% bounce, it drops back to the starting level. The dashboard shows every planned send time and the warm-up day.
    - Each email is re-checked right before sending.
    - **Bounce guard**: automatic sending pauses if more than 5% of the last 7 days' emails bounced (once at least 20 were sent).
 3. **Replies & pipeline**: the mailbox syncs every 10 minutes. Opt-outs and bounces are suppressed permanently.
