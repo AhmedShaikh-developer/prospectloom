@@ -1,7 +1,6 @@
 // Sign-up, sign-in (with optional 2FA), sign-out and account security.
 import express from 'express';
 import * as auth from '../services/auth.js';
-import { saveSettings } from '../lib/settings.js';
 
 export const authRouter = express.Router();
 const h = (fn) => async (req, res) => {
@@ -18,7 +17,11 @@ authRouter.get('/status', h((req) => ({
   enabled: auth.isEnabled(), user: auth.sessionUser(auth.readCookie(req)),
   needsSetup: auth.userCount() === 0, signupsOpen: auth.signupsOpen(),
 })));
-authRouter.post('/signup', h((req, res) => startSession(res, req, auth.signup(req.body || {}))));
+authRouter.post('/signup', h(async (req, res) => {
+  const r = await auth.signup(req.body || {});
+  return r.verify ? { verify: true, ticket: r.ticket, sentTo: r.sentTo, viaEmail: r.viaEmail } : startSession(res, req, r.user);
+}));
+authRouter.post('/signup/verify', h((req, res) => startSession(res, req, auth.verifySignup(req.body || {}).user)));
 authRouter.post('/login', h((req, res) => {
   const r = auth.login(req.body || {}, req.ip);
   return r.mfa ? r : startSession(res, req, r.user);
@@ -31,14 +34,8 @@ authRouter.post('/logout', h((req, res) => {
 }));
 
 // Signed-in only
-authRouter.get('/me', h((req) => ({ user: me(req), users: auth.listUsers() })));
+authRouter.get('/me', h((req) => auth.accountInfo(me(req).id)));
 authRouter.post('/2fa/start', h((req) => auth.startTwoFactor(me(req).id)));
 authRouter.post('/2fa/enable', h((req) => auth.enableTwoFactor(me(req).id, req.body?.code)));
 authRouter.post('/2fa/disable', h((req) => auth.disableTwoFactor(me(req).id, req.body || {})));
 authRouter.post('/password', h((req) => auth.changePassword(me(req).id, req.body || {})));
-authRouter.delete('/users/:id', h((req) => auth.removeUser(me(req).id, Number(req.params.id))));
-authRouter.put('/signups', h((req) => {
-  if (me(req).role !== 'owner') throw new Error('Only the owner can open or close sign-ups');
-  saveSettings({ allow_signups: req.body?.open ? '1' : '0' });
-  return { signupsOpen: auth.signupsOpen() };
-}));

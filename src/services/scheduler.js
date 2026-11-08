@@ -7,6 +7,8 @@ import { saveDailySummary } from './reports.js';
 import * as imap from '../integrations/imap.js';
 import * as engine from './engine.js';
 import * as sources from './sources.js';
+import { withWorkspace, currentDbPath, isPrimaryWorkspace } from '../db/index.js';
+import { allPaths } from './workspaces.js';
 import { importFolder } from './discovery.js';
 import { trackJob } from './jobs.js';
 
@@ -15,15 +17,26 @@ const autopilotJob = () => trackJob('autopilot', "Autopilot: preparing today's e
 let timer = null;
 const busy = new Set();
 
+// Locks are per workspace: one account's long research run never blocks another's sending.
+const lockKey = (name) => `${currentDbPath()}|${name}`;
 async function guarded(name, fn) {
-  if (busy.has(name)) return;
-  busy.add(name);
-  try { await fn(); } catch (e) { console.error(`[scheduler] ${name}:`, e.message); } finally { busy.delete(name); }
+  const key = lockKey(name);
+  if (busy.has(key)) return;
+  busy.add(key);
+  try { await fn(); } catch (e) { console.error(`[scheduler] ${name}:`, e.message); } finally { busy.delete(key); }
 }
+const isBusy = (name) => busy.has(lockKey(name));
 
 const minutesSince = (iso) => (iso ? (Date.now() - new Date(iso).getTime()) / 60000 : Infinity);
 
+/** One tick for every workspace (each account's pipeline runs independently). */
 export async function tick() {
+  for (const p of allPaths()) {
+    try { await withWorkspace(p, () => tickWorkspace()); } catch (e) { console.error('[scheduler]', p, e.message); }
+  }
+}
+
+async function tickWorkspace() {
   const autopilot = getBool('autopilot_enabled');
   const engineOn = getBool('engine_enabled');
   // Lead engine: one search at a time, paced (see engine.tick)
@@ -31,7 +44,7 @@ export async function tick() {
   // Paid lead sources (Apollo / Hunter / HubSpot): pull while credits last, wait and resume when they renew
   if (autopilot || engineOn) guarded('sources', () => sources.tick());
   // Watched leads folder: new or changed CSV files are imported automatically
-  if (getBool('watch_leads_folder') && minutesSince(getSetting('last_folder_check')) >= 10) {
+  if (isPrimaryWorkspace() && getBool('watch_leads_folder') && minutesSince(getSetting('last_folder_check')) >= 10) {
     setSetting('last_folder_check', new Date().toISOString());
     guarded('folder', async () => { const r = importFolder(); if (r.files.length) await trackJob('import', 'Leads folder import', {}, async () => r); });
   }
@@ -52,7 +65,7 @@ export async function tick() {
   if (getSetting('last_daily_jobs') !== dayKey && zonedNow().hour >= Math.max(0, getNum('send_window_start') - 1)) {
     setSetting('last_daily_jobs', dayKey);
     guarded('daily', async () => {
-      if (autopilot) { if (!busy.has('autopilot')) await autopilotJob(); }
+      if (autopilot) { if (!isBusy('autopilot')) await autopilotJob(); }
       else {
         if (getBool('auto_draft_enabled')) generateDrafts();
         generateFollowups();
@@ -61,7 +74,7 @@ export async function tick() {
     });
   }
   // Autopilot top-up: research finishes during the day, so newly READY leads can still go out today.
-  if (autopilot && !busy.has('daily') && minutesSince(getSetting('last_autopilot_topup')) >= 60) {
+  if (autopilot && !isBusy('daily') && minutesSince(getSetting('last_autopilot_topup')) >= 60) {
     setSetting('last_autopilot_topup', new Date().toISOString());
     guarded('autopilot', () => autopilotJob());
   }

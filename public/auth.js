@@ -1,6 +1,6 @@
 // Sign-in / 2FA / sign-up page.
 const $ = (s) => document.querySelector(s);
-const show = (id) => { ['#f-login', '#f-2fa', '#f-signup', '#closed'].forEach((x) => { $(x).hidden = x !== id; }); $(id)?.querySelector('input')?.focus(); };
+const show = (id) => { ['#f-login', '#f-2fa', '#f-verify', '#f-signup', '#closed'].forEach((x) => { $(x).hidden = x !== id; }); $(id)?.querySelector('input')?.focus(); };
 const err = (msg) => { const e = $('#auth-err'); e.textContent = msg || ''; e.hidden = !msg; };
 async function call(path, body) {
   const r = await fetch(`/api/auth${path}`, { method: body ? 'POST' : 'GET', headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -33,9 +33,19 @@ $('#f-2fa').onsubmit = async (e) => {
 $('#f-signup').onsubmit = async (e) => {
   e.preventDefault(); err(''); busy(e.target, true);
   try {
-    await call('/signup', { name: $('#su-name').value, email: $('#su-email').value, password: $('#su-pass').value });
-    goIn('/#/settings?tab=security&welcome=1');
+    const r = await call('/signup', { name: $('#su-name').value, email: $('#su-email').value, password: $('#su-pass').value });
+    if (r.verify) {
+      ticket = r.ticket;
+      $('#verify-sub').innerHTML = r.viaEmail
+        ? `<strong>${r.sentTo}</strong> owns existing data on this server. To open it, enter the 6-digit code we just emailed to that address.`
+        : `<strong>${r.sentTo}</strong> owns existing data on this server. Its mailbox is not set up here, so the 6-digit code is printed in the server log.`;
+      show('#f-verify');
+    } else goIn('/#/settings?tab=security&welcome=1');
   } catch (x) { err(x.message); } finally { busy(e.target, false); }
+};
+$('#f-verify').onsubmit = async (e) => {
+  e.preventDefault(); err(''); busy(e.target, true);
+  try { await call('/signup/verify', { ticket, code: $('#vf-code').value.trim() }); goIn('/#/settings?tab=security&welcome=1'); } catch (x) { err(x.message); } finally { busy(e.target, false); }
 };
 $('#su-pass').oninput = (e) => {
   const v = e.target.value; let s = 0;
@@ -51,7 +61,7 @@ $('#su-pass').oninput = (e) => {
   const wantsSignup = location.pathname === '/signup' || st.needsSetup;
   if (st.needsSetup) {
     $('#su-title').textContent = 'Set up your workspace';
-    $('#su-sub').textContent = 'Create the owner account. You can add two-factor authentication right after.';
+    $('#su-sub').textContent = 'Create your account. If this server already has your data, sign up with that email to open it.';
   }
   if (!st.signupsOpen) $('#to-signup').hidden = true;
   if (wantsSignup) show(st.signupsOpen ? '#f-signup' : '#closed'); else show('#f-login');

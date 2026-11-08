@@ -1,5 +1,5 @@
 // Phase 2/11/12: batch research execution with persistent progress markers and an auditable report.
-import { q, nowIso, logActivity } from '../db/index.js';
+import { q, nowIso, logActivity, currentDbPath } from '../db/index.js';
 import { getNum } from '../lib/settings.js';
 import { verifyCompany } from './verification.js';
 import { evaluateCompany, getCompany } from './companies.js';
@@ -7,7 +7,9 @@ import { inventory } from './inventory.js';
 import * as hubspot from '../integrations/hubspot.js';
 import { createJob, progressJob, finishJob } from './jobs.js';
 
-let running = null;
+// One research run at a time per workspace.
+const runs = new Map();
+const getRun = () => runs.get(currentDbPath()) || null;
 
 /**
  * Pick the next non-overlapping batch: unscreened first, then least-recently screened.
@@ -25,10 +27,10 @@ export function nextBatch(size = getNum('research_batch_size'), excludeIds = [])
     LIMIT :n`, { h: hours, n: size, now: new Date().toISOString() }).map((r) => r.id);
 }
 
-export function isRunning() { return !!running; }
+export function isRunning() { return !!getRun(); }
 
 export async function runResearch({ ids, size, concurrency = 4 } = {}) {
-  if (running) throw new Error('A research run is already in progress');
+  if (getRun()) throw new Error('A research run is already in progress');
   const started = nowIso();
   const runRes = q.run("INSERT INTO runs (kind, started_at, status) VALUES ('research', :now, 'running')", { now: started });
   const runId = Number(runRes.lastInsertRowid);
@@ -36,7 +38,9 @@ export async function runResearch({ ids, size, concurrency = 4 } = {}) {
   const before = Object.fromEntries(batch.map((id) => { const c = getCompany(id); return [id, c ? { status: c.status, rc: !!c.research_completed_at } : null]; }));
   const results = [];
   const errors = [];
-  running = { runId, total: batch.length, done: 0 };
+  const running = { runId, total: batch.length, done: 0 };
+  const wsKey = currentDbPath();
+  runs.set(wsKey, running);
   const jobId = createJob('research', `Researching ${batch.length} compan${batch.length === 1 ? 'y' : 'ies'}`, { runId });
   progressJob(jobId, 0, batch.length, 'Scanning websites, finding published emails…');
   try {
@@ -51,7 +55,7 @@ export async function runResearch({ ids, size, concurrency = 4 } = {}) {
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, batch.length || 1) }, worker));
   } finally {
-    running = null;
+    runs.delete(wsKey);
   }
 
   // ---- Auditable report (Phase 11) ----
@@ -103,7 +107,7 @@ export async function runResearch({ ids, size, concurrency = 4 } = {}) {
   return { runId, stats, outstanding, nextBatch: nextIds, report: lines.join('\n') };
 }
 
-export function progress() { return running; }
+export function progress() { return getRun(); }
 
 /** Used by the UI to explain why something is not READY. */
 export { evaluateCompany };

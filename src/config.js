@@ -18,6 +18,11 @@ export const config = {
   port: Number(env.PORT || 4317),
   host: env.HOST || '127.0.0.1',
   dbPath: env.DB_PATH || path.join(ROOT, 'data', 'pipeline.db'),
+  // Accounts (users, sessions, workspaces) live next to the primary database.
+  accountsDbPath: env.ACCOUNTS_DB_PATH || path.join(path.dirname(env.DB_PATH || path.join(ROOT, 'data', 'pipeline.db')), 'accounts.db'),
+  // Email that owns the primary database (default: its sender email). Claiming it needs a code sent to that mailbox.
+  ownerEmail: env.OWNER_EMAIL || '',
+  signupsOpen: env.SIGNUPS !== 'closed',
   testMode: env.APP_MODE === 'test',
   // Disable background jobs (research/IMAP/sending). Tests trigger jobs explicitly.
   schedulerEnabled: env.SCHEDULER !== 'off' && env.APP_MODE !== 'test',

@@ -1,7 +1,7 @@
 // Phase 2: lead discovery / import from CSV (generic, Clay, Apollo), Clay webhook,
 // pasted domain lists, Apollo search and HubSpot. Dedups by normalized domain.
 import { parse } from 'csv-parse/sync';
-import { q, nowIso, logActivity } from '../db/index.js';
+import { q, nowIso, logActivity, isPrimaryWorkspace } from '../db/index.js';
 import { upsertCompany } from './companies.js';
 import { normalizeDomain } from '../lib/normalize.js';
 
@@ -176,6 +176,7 @@ import { extractEmails } from '../lib/emailRules.js';
 import { normalizeEmail, emailDomain } from '../lib/normalize.js';
 
 export function leadsFolder() {
+  if (!isPrimaryWorkspace()) throw new Error('The leads folder is on the server owner\'s computer — upload your CSV files in the “CSV files” tab instead.');
   const dir = path.resolve(ROOT, getSetting('leads_folder') || 'leads csv');
   if (!dir.startsWith(ROOT)) throw new Error('The leads folder must be inside the app folder');
   return dir;

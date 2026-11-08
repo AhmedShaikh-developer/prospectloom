@@ -1,4 +1,4 @@
-import { q } from '../db/index.js';
+import { q, isPrimaryWorkspace } from '../db/index.js';
 import { config } from '../config.js';
 
 // Phase 1 + operational settings. Everything editable from the Settings page.
@@ -153,7 +153,8 @@ export function getSetting(key) {
   const row = q.get('SELECT value FROM settings WHERE key = :key', { key });
   if (row && row.value !== null && row.value !== '') return row.value;
   if (key in DEFAULT_SETTINGS) return DEFAULT_SETTINGS[key];
-  if (key in config.defaults) return config.defaults[key];
+  // Keys from .env (Groq, HubSpot, mailbox…) belong to the server owner's workspace, never to other accounts.
+  if (key in config.defaults) return SECRET_KEYS.includes(key) && !isPrimaryWorkspace() ? '' : config.defaults[key];
   return '';
 }
 

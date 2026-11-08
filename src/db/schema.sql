@@ -218,25 +218,3 @@ CREATE TABLE IF NOT EXISTS source_state (
   last_ok_at TEXT,
   updated_at TEXT
 );
-
--- Accounts (sign-in with optional two-factor authentication) and their sessions.
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  email TEXT NOT NULL UNIQUE,
-  name TEXT,
-  password_hash TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'member',     -- owner | member
-  totp_secret TEXT,
-  totp_enabled INTEGER NOT NULL DEFAULT 0,
-  recovery_codes TEXT,                     -- JSON array of SHA-256 hashes (one-time)
-  created_at TEXT NOT NULL,
-  last_login_at TEXT
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  id_hash TEXT PRIMARY KEY,                -- SHA-256 of the cookie token (the token itself is never stored)
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  created_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  ip TEXT,
-  user_agent TEXT
-);

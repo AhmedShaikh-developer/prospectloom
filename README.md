@@ -37,14 +37,16 @@ Requires Node 22.13+ (uses the built-in `node:sqlite`). Data lives in `data/pipe
 - **Already contacted**: paste emails or domains you emailed with other tools. Your Hostinger Sent folder is read over IMAP. Either way, those people never get a second intro.
 - **Background jobs**: searches, imports, research and autopilot run on the server. Their progress shows in the sidebar on every page, so leaving a page never loses work.
 
-## Accounts & two-factor authentication
+## Accounts, private workspaces & two-factor authentication
 
-The first person to open the app creates the **owner** account. Everyone else signs in, and sign-ups stay closed unless the owner opens them in Settings → Security. Team members share the same workspace.
+Every account has its **own private workspace**: its own leads, emails, settings, mailbox and keys, stored in a separate database file. One account can never see another's data.
 
-- Passwords are hashed with scrypt. Sessions last 30 days in an HttpOnly cookie, and only their hash is stored.
-- **2FA:** Settings → Security → *Turn on two-factor authentication*. Scan the QR code with Google Authenticator, 1Password, Authy or similar, and save the 8 one-time recovery codes. The QR code is drawn locally; the secret never leaves the server.
-- After 5 wrong passwords or codes, sign-in for that account pauses for 15 minutes.
-- The unsubscribe links and the Clay webhook stay public (the webhook has its own secret).
+- **Existing data:** the original database (`data/pipeline.db`) belongs to its owner email. That's `OWNER_EMAIL` in `.env`, or the sender email saved in it. Signing up with that email opens the existing data, but only after entering a 6-digit code emailed to that address, so nobody else can claim it by typing the address. If its mailbox isn't set up yet, the code is printed in the server log.
+- **Everyone else:** any other email gets a new, empty workspace. Set `SIGNUPS=closed` to stop new sign-ups.
+- **Your private keys:** keys in `.env` (Groq, HubSpot…) are used only by the server owner's workspace. Other accounts add their own in Integrations.
+- **Security:** passwords are hashed with scrypt. Sessions last 30 days in an HttpOnly cookie, and only their hash is stored. After 5 wrong attempts, sign-in pauses for 15 minutes.
+- **2FA:** Settings → Security → *Turn on two-factor authentication*. Scan the QR code with any authenticator app and save the 8 one-time recovery codes.
+- **Public links:** unsubscribe links and the Clay webhook stay public. Each workspace has its own webhook secret.
 
 ## Deploying (always-on server)
 

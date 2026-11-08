@@ -1,13 +1,15 @@
 // Accounts, sessions and two-factor authentication (TOTP, RFC 6238).
 // - Passwords: scrypt with a per-user salt. Sessions: random 32-byte tokens; only their SHA-256 is stored.
 // - 2FA: authenticator-app codes (Google Authenticator, 1Password, Authy…) + one-time recovery codes.
-// - The first account is the owner. Later sign-ups are closed unless the owner opens them.
-// This is a single-workspace app: everyone who signs in sees the same pipeline.
+// - Each account has its own workspace (its own leads, emails and settings). Signing up with the
+//   primary workspace's owner email claims the existing data — after confirming a code sent to that mailbox.
 import crypto from 'node:crypto';
 import qrcode from 'qrcode-generator';
-import { q, nowIso, logActivity } from '../db/index.js';
+import { accounts as q, nowIso, withWorkspace } from '../db/index.js';
 import { config } from '../config.js';
-import { getBool } from '../lib/settings.js';
+import * as workspaces from './workspaces.js';
+import { sendMail } from '../integrations/mailer.js';
+import { getSetting } from '../lib/settings.js';
 
 const DAY = 86400_000;
 export const COOKIE = 'pl_session';
@@ -81,20 +83,70 @@ const ok = (key) => attempts.delete(key);
 
 // ---------------------------------------------------------------- users & sessions
 export const userCount = () => q.get('SELECT COUNT(*) AS n FROM users').n;
-export const signupsOpen = () => userCount() === 0 || getBool('allow_signups');
-const publicUser = (u) => (u ? { id: u.id, email: u.email, name: u.name, role: u.role, twoFactor: !!u.totp_enabled, createdAt: u.created_at } : null);
+export const signupsOpen = () => config.signupsOpen || userCount() === 0;
+const publicUser = (u) => (u ? { id: u.id, email: u.email, name: u.name, role: u.role, twoFactor: !!u.totp_enabled, createdAt: u.created_at, workspaceId: u.workspace_id } : null);
 
-export function signup({ name, email, password }) {
-  if (!signupsOpen()) throw new Error('Sign-ups are closed. Ask the owner to invite you.');
+function insertUser({ name, email, passwordHash, workspaceId }) {
+  const r = q.run('INSERT INTO users (email, name, password_hash, workspace_id, role, created_at) VALUES (:e, :n, :h, :w, :role, :now)', {
+    e: email, n: String(name || '').trim() || email.split('@')[0], h: passwordHash, w: workspaceId, role: 'owner', now: nowIso(),
+  });
+  const id = Number(r.lastInsertRowid);
+  workspaces.setOwner(workspaceId, id);
+  return publicUser(q.get('SELECT * FROM users WHERE id = :id', { id }));
+}
+
+const claims = new Map(); // ticket -> pending claim of the primary workspace
+
+/**
+ * New account. With the primary workspace's owner email (and the primary not yet claimed), the existing
+ * data is claimed — but only after a 6-digit code sent to that mailbox is entered: { verify: true, ticket }.
+ * Any other email gets a new, empty workspace: { user }.
+ */
+export async function signup({ name, email, password }) {
   const e = normEmail(email);
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) throw new Error('Enter a valid email address');
   const problem = passwordProblem(password);
   if (problem) throw new Error(problem);
   if (q.get('SELECT id FROM users WHERE email = :e', { e })) throw new Error('An account with this email already exists — sign in instead');
-  const role = userCount() === 0 ? 'owner' : 'member';
-  const r = q.run('INSERT INTO users (email, name, password_hash, role, created_at) VALUES (:e, :n, :h, :role, :now)', { e, n: String(name || '').trim() || e.split('@')[0], h: hashPassword(password), role, now: nowIso() });
-  logActivity(null, 'user_signed_up', { email: e, role }, e);
-  return publicUser(q.get('SELECT * FROM users WHERE id = :id', { id: Number(r.lastInsertRowid) }));
+  const main = workspaces.primary();
+  if (!main.owner_user_id && e === workspaces.claimEmail()) {
+    const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+    const ticket = crypto.randomBytes(24).toString('hex');
+    claims.set(ticket, { name, email: e, passwordHash: hashPassword(password), codeHash: sha(code), until: Date.now() + 15 * 60_000, tries: 0 });
+    let sent = false;
+    try {
+      await withWorkspace(workspaces.resolvePath(workspaces.PRIMARY), () => sendMail({
+        from: `"ProspectLoom" <${getSetting('sender_email') || getSetting('smtp_user')}>`, to: e,
+        subject: `Your ProspectLoom code: ${code}`,
+        text: `Your code to open your existing ProspectLoom workspace is ${code}\n\nIt expires in 15 minutes. If you did not just sign up, ignore this email — nobody can open your data without this code.`,
+        messageId: `<${crypto.randomUUID()}@prospectloom.local>`,
+      }));
+      sent = true;
+    } catch { /* mailbox not set up yet: the code is in the server log instead */ }
+    if (!sent) console.log(`[sign-up] code for ${e}: ${code} (mailbox not available, so it is shown here)`);
+    return { verify: true, ticket, sentTo: e, viaEmail: sent };
+  }
+  if (!signupsOpen()) throw new Error('Sign-ups are closed on this server.');
+  const ws = workspaces.create(`${String(name || '').trim() || e} workspace`);
+  return { user: insertUser({ name, email: e, passwordHash: hashPassword(password), workspaceId: ws.id }) };
+}
+
+/** Step 2 of claiming the existing data: the code from the email. */
+export function verifySignup({ ticket, code }) {
+  const c = claims.get(ticket);
+  if (!c || c.until < Date.now()) { claims.delete(ticket); throw new Error('This code has expired — sign up again to get a new one'); }
+  if (c.tries >= 5) { claims.delete(ticket); throw new Error('Too many wrong codes — sign up again to get a new one'); }
+  if (sha(String(code || '').trim()) !== c.codeHash) { c.tries++; throw new Error('That code is not right — check the email we sent'); }
+  claims.delete(ticket);
+  const main = workspaces.primary();
+  if (main.owner_user_id) throw new Error('This workspace has already been claimed — sign in instead');
+  if (q.get('SELECT id FROM users WHERE email = :e', { e: c.email })) throw new Error('An account with this email already exists — sign in instead');
+  return { user: insertUser({ name: c.name, email: c.email, passwordHash: c.passwordHash, workspaceId: main.id }) };
+}
+
+/** Database file of a signed-in user's workspace. */
+export function workspacePathOf(user) {
+  return user?.workspaceId ? workspaces.pathOf(user.workspaceId) : null;
 }
 
 const pending = new Map(); // 2FA login tickets: ticket -> { userId, until }
@@ -133,7 +185,6 @@ export function loginSecondFactor({ ticket, code }, ip = '') {
     if (codes.includes(h)) {
       q.run('UPDATE users SET recovery_codes = :c WHERE id = :id', { c: JSON.stringify(codes.filter((x) => x !== h)), id: u.id });
       good = true;
-      logActivity(null, 'recovery_code_used', { email: u.email }, u.email);
     }
   }
   if (!good) { fail(key); throw new Error('That code is not right — check the time on your phone and try again'); }
@@ -181,14 +232,12 @@ export function enableTwoFactor(userId, code) {
   if (!verifyTotp(u.totp_secret, code)) throw new Error('That code is not right — scan the QR code again or check the time on your phone');
   const codes = Array.from({ length: 8 }, () => crypto.randomBytes(5).toString('hex').slice(0, 8).replace(/(.{4})/, '$1-'));
   q.run('UPDATE users SET totp_enabled = 1, recovery_codes = :c WHERE id = :id', { c: JSON.stringify(codes.map((x) => sha(x.replace('-', '')))), id: userId });
-  logActivity(null, 'two_factor_enabled', { email: u.email }, u.email);
   return { recoveryCodes: codes };
 }
 export function disableTwoFactor(userId, { code, password }) {
   const u = q.get('SELECT * FROM users WHERE id = :id', { id: userId });
   if (!checkPassword(password, u.password_hash) || !verifyTotp(u.totp_secret, code)) throw new Error('Enter your password and a current code to turn 2FA off');
   q.run('UPDATE users SET totp_enabled = 0, totp_secret = NULL, recovery_codes = NULL WHERE id = :id', { id: userId });
-  logActivity(null, 'two_factor_disabled', { email: u.email }, u.email);
   return { ok: true };
 }
 export function changePassword(userId, { current, next }) {
@@ -199,14 +248,9 @@ export function changePassword(userId, { current, next }) {
   q.run('UPDATE users SET password_hash = :h WHERE id = :id', { h: hashPassword(next), id: userId });
   return { ok: true };
 }
-export function listUsers() {
-  return q.all('SELECT * FROM users ORDER BY id').map((u) => ({ ...publicUser(u), lastLoginAt: u.last_login_at }));
-}
-export function removeUser(actorId, id) {
-  const actor = q.get('SELECT * FROM users WHERE id = :id', { id: actorId });
-  if (actor.role !== 'owner') throw new Error('Only the owner can remove people');
-  if (Number(id) === actorId) throw new Error('You cannot remove yourself');
-  q.run('DELETE FROM sessions WHERE user_id = :id', { id });
-  q.run('DELETE FROM users WHERE id = :id', { id });
-  return { ok: true };
+/** The account and its workspace, for the Security page. */
+export function accountInfo(userId) {
+  const u = q.get('SELECT * FROM users WHERE id = :id', { id: userId });
+  const w = workspaces.byId(u.workspace_id);
+  return { user: publicUser(u), workspace: w ? { id: w.id, name: w.name, primary: w.db_path === workspaces.PRIMARY, createdAt: w.created_at } : null };
 }

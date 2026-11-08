@@ -1168,7 +1168,7 @@ async function renderSettings({ params = {} } = {}) {
       <div class="card"><h2>Password</h2><div class="field"><label for="pw-cur">Current password</label><input type="password" id="pw-cur" autocomplete="current-password"></div>
         <div class="field"><label for="pw-new">New password (10+ characters, letters and a number)</label><input type="password" id="pw-new" autocomplete="new-password"></div>
         <button type="button" id="pw-save" data-testid="pw-save">${ic('check')}Change password</button></div>
-      <div class="card" style="grid-column:1/-1"><div class="card-head"><h2>${ic('users')}People in this workspace</h2><span id="signup-toggle"></span></div><div id="sec-users"></div></div></div>`;
+      <div class="card" style="grid-column:1/-1" data-testid="account-card"><div class="card-head"><h2>${ic('users')}Your account</h2></div><div id="sec-account"></div></div></div>`;
   const names = { offers: 'Offers', sender: 'Sender & compliance', schedule: 'Autopilot & schedule', templates: 'Templates', ai: 'AI writing', security: 'Security' };
   const tab = sections[params.tab] ? params.tab : 'offers';
   app.innerHTML = `${head('Settings', 'Offers, compliance, sending schedule, templates and AI writing. Connections live in Integrations. Everything is stored only in your local database.')}
@@ -1372,7 +1372,7 @@ async function wireSecurity(params = {}) {
   const box = $('#sec-2fa'); if (!box) return;
   const st = await GET('/auth/status').catch(() => ({ enabled: false }));
   if (!st.enabled) { $('#sec-root').innerHTML = `<div class="card" style="grid-column:1/-1">${empty('Sign-in is turned off on this server', ' — set AUTH_ENABLED=1 (the default) to require accounts and 2FA.')}</div>`; return; }
-  const { user, users } = await GET('/auth/me');
+  const { user, workspace } = await GET('/auth/me');
   const draw2fa = () => {
     $('#tfa-badge').innerHTML = user.twoFactor ? badge('ok', 'On') : badge('warn', 'Off');
     box.innerHTML = user.twoFactor
@@ -1400,13 +1400,11 @@ async function wireSecurity(params = {}) {
   };
   draw2fa();
   $('#pw-save').onclick = (e) => act(e.currentTarget, () => POST('/auth/password', { current: $('#pw-cur').value, next: $('#pw-new').value }), 'Password changed').then((r) => { if (r) { $('#pw-cur').value = ''; $('#pw-new').value = ''; } });
-  const owner = user.role === 'owner';
-  $('#signup-toggle').innerHTML = owner ? `<label class="check" style="margin:0"><input type="checkbox" id="signups" ${st.signupsOpen ? 'checked' : ''} data-testid="signups-toggle"> <span>Let people create an account (they share this workspace)</span></label>` : '';
-  if ($('#signups')) $('#signups').onchange = (e) => act(null, () => api('PUT', '/auth/signups', { open: e.target.checked }), e.target.checked ? 'Sign-ups open — share /signup with your team' : 'Sign-ups closed');
-  $('#sec-users').innerHTML = `<div class="table-wrap"><table data-testid="users-table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>2FA</th><th>Last sign-in</th><th></th></tr></thead><tbody>
-    ${users.map((u) => `<tr><td class="cell-title">${esc(u.name)}${u.id === user.id ? ' <span class="muted small-t">(you)</span>' : ''}</td><td>${esc(u.email)}</td><td>${esc(u.role)}</td><td>${u.twoFactor ? badge('ok', 'On') : badge('warn', 'Off')}</td><td class="cell-sub">${fmtDate(u.lastLoginAt)}</td>
-      <td class="num">${owner && u.id !== user.id ? `<button type="button" class="small danger rm-user" data-id="${u.id}">Remove</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
-  $$('.rm-user').forEach((b) => { b.onclick = (e) => { if (!confirm('Remove this person? They will be signed out.')) return; act(e.currentTarget, () => api('DELETE', `/auth/users/${b.dataset.id}`), 'Removed').then((r) => r && route()); }; });
+  $('#sec-account').innerHTML = `<table class="plain"><tbody>
+      <tr><td class="muted">Email</td><td class="num"><strong data-testid="account-email">${esc(user.email)}</strong></td></tr>
+      <tr><td class="muted">Workspace</td><td class="num">${esc(workspace?.name || '—')} ${workspace?.primary ? badge('ok', 'existing data') : ''}</td></tr>
+      <tr><td class="muted">Account created</td><td class="num">${fmtDate(user.createdAt)}</td></tr></tbody></table>
+    <p class="small-t muted" style="margin:12px 0 0">Your leads, emails and settings are private to this account. Anyone who signs up with another email gets their own empty workspace.</p>`;
 }
 
 // ---------------------------------------------------------------- brand & greeting

@@ -55,9 +55,18 @@
           <p class="auth-alt"><a href="/login">Use a different account</a></p>
         </form>
 
+        <form id="f-verify" data-testid="form-verify" hidden>
+          <div class="auth-icon"><svg class="i" style="width:26px;height:26px"><use href="#i-lock"/></svg></div>
+          <h2 class="auth-title">Check your inbox</h2>
+          <p class="auth-sub" id="verify-sub">This email owns existing data on this server. To open it, enter the 6-digit code we just sent.</p>
+          <div class="field"><input id="vf-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" class="code-input" required data-testid="verify-code"></div>
+          <button class="primary wide" data-testid="verify-submit">Open my workspace</button>
+          <p class="auth-alt"><a href="/signup">Start over</a></p>
+        </form>
+
         <form id="f-signup" data-testid="form-signup" hidden>
           <h2 class="auth-title" id="su-title">Create your account</h2>
-          <p class="auth-sub" id="su-sub">It takes a minute. You can turn on two-factor authentication right after.</p>
+          <p class="auth-sub" id="su-sub">You get your own private workspace. You can turn on two-factor authentication right after.</p>
           <div class="field"><label for="su-name">Your name</label><input id="su-name" name="name" autocomplete="name" required data-testid="signup-name"></div>
           <div class="field"><label for="su-email">Email</label><input id="su-email" name="email" type="email" autocomplete="username" required data-testid="signup-email"></div>
           <div class="field"><label for="su-pass">Password</label><input id="su-pass" name="password" type="password" autocomplete="new-password" minlength="10" required data-testid="signup-password">
@@ -68,7 +77,7 @@
 
         <div id="closed" hidden data-testid="signups-closed">
           <h2 class="auth-title">Sign-ups are closed</h2>
-          <p class="auth-sub">This workspace is private. Ask the owner to open sign-ups for you, then come back.</p>
+          <p class="auth-sub">This server does not accept new accounts right now.</p>
           <a class="btn primary wide" href="/login">Back to sign in</a>
         </div>
 

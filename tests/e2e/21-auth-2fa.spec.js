@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import crypto from 'node:crypto';
+import { COMPLIANCE } from './helpers.js';
 
 // Accounts: the app is locked until you sign in; the first account is the owner; two-factor
 // authentication with an authenticator app and one-time recovery codes; sign-ups closed by default.
@@ -90,27 +91,39 @@ test.describe.serial('Sign-in, sign-up & two-factor authentication', () => {
     await expect(page.getByTestId('auth-error')).toContainText('not right');
   });
 
-  test('sign-ups are closed after the owner — until the owner opens them', async ({ page, browser }) => {
-    const other = await (await browser.newContext()).newPage();
-    await other.goto('/signup');
-    await expect(other.getByTestId('signups-closed')).toBeVisible();
-
+  test('a new account gets its own empty workspace — it never sees the existing data', async ({ page }) => {
     await signIn(page, { code: totp(secret, Date.now() + 30_000) });
+    await page.goto('/#/dashboard');
+    await expect(page.getByTestId('kpi-total')).toHaveText('0');
     await page.goto('/#/settings?tab=security');
-    await page.getByTestId('signups-toggle').check();
-    await expect(page.getByTestId('toast').filter({ hasText: 'Sign-ups open' })).toBeVisible();
+    await expect(page.getByTestId('account-email')).toHaveText(OWNER.email);
+    await expect(page.getByTestId('account-card')).not.toContainText('existing data');
+  });
 
-    await other.goto('/signup');
-    await other.getByTestId('signup-name').fill('Sam Member');
-    await other.getByTestId('signup-email').fill('sam@acmestudio.dev');
-    await other.getByTestId('signup-password').fill('Another strong 77 pass');
-    await other.getByTestId('signup-submit').click();
-    await expect(other).toHaveURL(/#\/settings\?tab=security/);
-    await page.reload();
-    await expect(page.getByTestId('users-table')).toContainText('sam@acmestudio.dev');
-    await expect(page.getByTestId('users-table')).toContainText('member');
-    await page.getByTestId('signups-toggle').uncheck();
-    await expect(page.getByTestId('toast').filter({ hasText: 'Sign-ups closed' })).toBeVisible();
+  test('the existing data is claimed only with the code emailed to its owner address', async ({ browser, request }) => {
+    const p = await (await browser.newContext()).newPage();
+    const claim = COMPLIANCE.sender_email; // the primary workspace's sender email owns its data
+    await p.goto('/signup');
+    await p.getByTestId('signup-name').fill('Alex Owner');
+    await p.getByTestId('signup-email').fill(claim);
+    await p.getByTestId('signup-password').fill('Existing data 2026 pw');
+    await p.getByTestId('signup-submit').click();
+    await expect(p.getByTestId('form-verify')).toBeVisible();
+    await expect(p.getByTestId('form-verify')).toContainText(claim);
+    await p.getByTestId('verify-code').fill('000000');
+    await p.getByTestId('verify-submit').click();
+    await expect(p.getByTestId('auth-error')).toContainText('not right');
+    const mail = (await (await request.get('/__test/captured')).json()).reverse().find((m) => m.to === claim && /Your ProspectLoom code/.test(m.subject));
+    const code = mail.subject.match(/(\d{6})/)[1];
+    await p.getByTestId('verify-code').fill(code);
+    await p.getByTestId('verify-submit').click();
+    await expect(p).toHaveURL(/#\/settings\?tab=security/);
+    await expect(p.getByTestId('account-card')).toContainText('existing data');
+    await p.goto('/#/dashboard');
+    await expect.poll(async () => Number((await p.getByTestId('kpi-total').textContent()).replace(/,/g, ''))).toBeGreaterThan(0);
+    // nobody can claim it again
+    const again = await request.post('/api/auth/signup', { data: { name: 'X', email: claim, password: 'Another one 99 pw' } });
+    expect((await again.json()).error).toContain('already exists');
   });
 
   test('repeated wrong passwords lock sign-in for a while', async ({ request }) => {

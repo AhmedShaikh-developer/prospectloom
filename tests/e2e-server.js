@@ -4,7 +4,9 @@ import path from 'node:path';
 
 const dbPath = path.resolve('tests/.tmp/e2e.db');
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-for (const f of [dbPath, dbPath + '-wal', dbPath + '-shm']) fs.rmSync(f, { force: true });
+const accountsDb = path.join(path.dirname(dbPath), 'accounts.db');
+for (const f of [dbPath, dbPath + '-wal', dbPath + '-shm', accountsDb, accountsDb + '-wal', accountsDb + '-shm']) fs.rmSync(f, { force: true });
+fs.rmSync(path.join(path.dirname(dbPath), 'workspaces'), { recursive: true, force: true });
 
 Object.assign(process.env, {
   APP_MODE: 'test',
