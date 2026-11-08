@@ -3,7 +3,7 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import { config } from '../config.js';
 
-export const USER_AGENT = 'LocalhostLabsResearch/1.0 (+business research; read-only)';
+export const USER_AGENT = 'ProspectLoomResearch/1.0 (+business research; read-only)';
 
 function isPrivateIp(ip) {
   if (net.isIPv4(ip)) {

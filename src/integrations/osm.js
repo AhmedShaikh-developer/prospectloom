@@ -5,7 +5,7 @@ import { getSetting } from '../lib/settings.js';
 import { normalizeDomain, normalizeUrl } from '../lib/normalize.js';
 import { q, nowIso } from '../db/index.js';
 
-const UA = 'LocalhostLabsLeadFinder/1.0 (personal lead research tool)';
+const UA = 'ProspectLoomLeadFinder/1.0 (personal lead research tool)';
 
 // label, group, OSM tag key, values, suggested offer
 export const CATEGORIES = [

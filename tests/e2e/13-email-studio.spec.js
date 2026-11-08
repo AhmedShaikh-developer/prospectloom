@@ -95,8 +95,8 @@ test.describe.serial('Email studio, research assistant & setup guide', () => {
     await page.goto(`/#/company/${ready.id}`);
     await page.getByTestId('studio-ai').click();
     await expectToast(page, 'read it before saving');
-    await expect(page.getByTestId('studio-subject')).toHaveValue('quick question about dispatch');
-    await expect(page.getByTestId('studio-body')).toHaveValue(/AI-WRITTEN body/);
+    await expect(page.getByTestId('studio-subject')).toHaveValue('your booking page');
+    await expect(page.getByTestId('studio-body')).toHaveValue(/AI-WRITTEN note/);
     const { lastPrompt } = await (await request.get(`${MOCK}/__state`)).json();
     expect(lastPrompt).toContain('VERIFIED FACTS');
     expect(lastPrompt).toContain('AI Writer Co');

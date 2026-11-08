@@ -38,7 +38,7 @@ export async function testConnection() {
   return { ok: true, sample: data.results?.length ?? 0 };
 }
 
-/** Check that the Localhost Labs custom properties exist on companies. */
+/** Check that the ll_* custom properties exist on companies. */
 export async function checkProperties() {
   const out = [];
   for (const name of HUBSPOT_PROPERTIES) {

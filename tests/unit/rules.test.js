@@ -165,11 +165,11 @@ test('autoOffer: agencies → B, consumer-facing local businesses → C, others 
 });
 
 test('AI quality gate rejects placeholders, links, hype and invented numbers', () => {
-  const ok = { subject: 'quick idea for sunrise', body: `Hi there,\n\n${'I came across your brunch menu and wanted to share one idea about online bookings for busy weekends. '.repeat(2)}\n\nWould a short call be useful?\n\nAlex` };
+  const ok = { subject: 'your brunch menu', body: 'Hi there,\n\nSaw the weekend brunch menu on your site. Looks like bookings still go through the phone.\n\nWe set up simple online booking for small local places, usually in a week or two, so weekends get a little calmer at the front.\n\nIs that something you have thought about, or not a priority right now?\n\nAlex' };
   assert.deepEqual(validateDraft(ok), []);
   assert.ok(validateDraft({ ...ok, body: ok.body.replace('Hi there', 'Hi [Name]') }).length);
   assert.ok(validateDraft({ ...ok, body: ok.body + ' See https://x.com' }).length);
-  assert.ok(validateDraft({ ...ok, body: ok.body.replace('useful?', 'useful!') }).length);
+  assert.ok(validateDraft({ ...ok, body: ok.body.replace('right now?', 'right now!') }).length);
   assert.ok(validateDraft({ ...ok, body: ok.body + ' We grew sales 40% for others.' }).length);
   assert.ok(validateDraft({ subject: 'x', body: 'Too short. Alex' }).length);
 });
@@ -264,4 +264,34 @@ test('warm-up: 10/day for 14 days, then +5 every 7 days up to 40', async () => {
 test('"today" follows the recipients\' timezone (a New York day spans two Pakistan dates)', () => {
   const start = ob.zonedDayStart(new Date('2026-11-10T03:30:00Z'), 'America/New_York'); // 22:30 NY on 9 Nov
   assert.equal(start.toISOString(), '2026-11-09T05:00:00.000Z');
+});
+
+const { plainText } = await import('../../src/integrations/ai.js');
+
+test('quality gate: machine-sounding emails are rejected (flattery, AI words, dashes, copied pitch, salesy subject)', () => {
+  const base = { subject: 'your dev work', body: 'Hi there,\n\nSaw the Linus Health project on your site.\n\nWe do the backend side for design studios, so your team can say yes to the bigger builds without hiring.\n\nDo you ever need extra hands on that side of things?\n\nAlex' };
+  assert.deepEqual(validateDraft(base), []);
+  const bad = (body) => validateDraft({ ...base, body });
+  assert.match(bad(base.body.replace('Saw the', 'I was impressed by the')).join(' '), /machine-written \("impressed"\)/);
+  assert.match(bad(base.body.replace('We do', 'We seamlessly do')).join(' '), /machine-written/);
+  assert.match(bad(base.body.replace('Do you ever', 'Would a brief call to explore')).join(' '), /machine-written/);
+  assert.match(bad(base.body.replace('site.', 'site — nice work.')).join(' '), /dashes/);
+  assert.match(validateDraft({ ...base, subject: 'collaboration opportunity' }).join(' '), /salesy subject/);
+  setSetting('offer_b_pitch', 'We act as a white-label engineering team for agencies: custom development, API integrations, backend and automation.');
+  assert.match(validateDraft({ ...base, body: base.body.replace('We do the backend side for design studios', 'We act as a white-label engineering team for agencies: custom development') }, { offer: 'B' }).join(' '), /copies the offer description/);
+  assert.deepEqual(validateDraft(base, { offer: 'B' }), []);
+});
+
+test('plainText removes typography that gives AI text away', () => {
+  assert.equal(plainText('white‑label work — integrations, member areas'), 'white-label work, integrations, member areas');
+  assert.equal(plainText('clients’ sites'), "clients' sites");
+});
+
+test('greeting by name only when the name fits the email address', () => {
+  assert.equal(ob.nameFitsEmail('Kirk James', 'kirk@cinco.design'), true);
+  assert.equal(ob.nameFitsEmail('Nancy Serrano', 'nserrano@fixture-freight.com'), true);
+  assert.equal(ob.nameFitsEmail('Laurent Hainaut', 'laurent@forcemajeure.design'), true);
+  assert.equal(ob.nameFitsEmail('José Núñez', 'jose.nunez@x.com'), true);
+  assert.equal(ob.nameFitsEmail('Chelsea Douglass', 'mike.reynolds@innovatemap.com'), false);
+  assert.equal(ob.nameFitsEmail('Chelsea Douglass', 'hello@innovatemap.com'), false);
 });

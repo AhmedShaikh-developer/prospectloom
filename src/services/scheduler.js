@@ -9,7 +9,7 @@ import * as engine from './engine.js';
 import { importFolder } from './discovery.js';
 import { trackJob } from './jobs.js';
 
-const autopilotJob = () => trackJob('autopilot', "Autopilot: preparing today's emails", {}, (ctx) => runAutopilot({ onProgress: ctx.progress }).then((r) => ({ ...r, summary: `${r.approved} email(s) approved to send · ${r.aiWritten} written by AI` })));
+const autopilotJob = () => trackJob('autopilot', "Autopilot: preparing today's emails", {}, (ctx) => runAutopilot({ onProgress: ctx.progress }).then((r) => ({ ...r, summary: r.held != null ? `${r.held} email(s) written and waiting for your approval · ${r.aiWritten} written by AI` : `${r.approved} email(s) approved to send · ${r.aiWritten} written by AI` })));
 
 let timer = null;
 const busy = new Set();

@@ -43,7 +43,7 @@ api.post('/__groq-mode', (req, res) => { groqMode = req.body.mode; res.json({ ok
 api.get('/openai/v1/models', (req, res) => res.json({ data: [{ id: 'openai/gpt-oss-120b' }, { id: 'openai/gpt-oss-20b' }] }));
 api.post('/openai/v1/chat/completions', (req, res) => {
   lastPrompt = req.body.messages.map((m) => m.content).join('\n\n');
-  const good = 'SUBJECT: quick question about dispatch\nBODY:\nHi there,\n\nAI-WRITTEN body using only verified facts. I came across your work while looking at local businesses and wanted to reach out with one practical idea about bookings and enquiries.\n\nWe build simple tools that take repetitive admin off small teams, and we usually start with the one task that eats the most time each week.\n\nWould a quick 15-minute call next week be useful?\n\nAlex';
+  const good = 'SUBJECT: your booking page\nBODY:\nHi there,\n\nAI-WRITTEN note. Saw on your site that people can only book by phone right now.\n\nWe set up simple online booking and ordering for small local places, usually in a week or two, so the phone rings a bit less.\n\nIs that something you have thought about, or not a priority right now?\n\nAlex';
   const bad = 'SUBJECT: Hi [Name]!\nBODY:\nHi [Name]! We grew revenue 300% for clients like you! Visit https://example.com now!';
   res.json({ choices: [{ message: { role: 'assistant', content: groqMode === 'bad' ? bad : good } }] });
 });

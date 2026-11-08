@@ -95,6 +95,10 @@ export function blockers() {
   if (stalled) out.push({ severity: 'low', area: 'Research', message: `${stalled} companies screened 3+ times without progress (usually no email published on their website) — re-checked every 14 days automatically; add details by hand if you know them`, link: '#/companies?status=RESEARCHING,HOLD_VERIFY&stalled=1' });
   const inv = inventory();
   if (inv.eligibleUnsent < inv.dailyVolume * 14) out.push({ severity: 'high', area: 'Inventory', message: `Reserve covers ${inv.reserveDays ?? 0} days — below the 14-day minimum (${inv.reserve14.shortfall} short)`, link: '#/companies?status=HOLD_VERIFY' });
+  if (getBool('autopilot_review')) {
+    const waiting = q.get("SELECT COUNT(*) AS n FROM messages WHERE status = 'draft'").n;
+    if (waiting) out.push({ severity: 'high', area: 'Outreach', message: `${waiting} email(s) written and waiting for your approval — nothing goes out until you approve`, link: '#/outreach' });
+  }
   const pendingOps = q.get("SELECT COUNT(*) AS n FROM hubspot_ops WHERE status IN ('proposed','approved')").n;
   if (pendingOps) out.push({ severity: 'low', area: 'HubSpot', message: `${pendingOps} CRM write(s) awaiting approval — not synchronized yet`, link: '#/hubspot' });
   const bg = bounceGuard();

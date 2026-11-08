@@ -1,10 +1,10 @@
-# Localhost Labs — Client Acquisition Pipeline
+# ProspectLoom
 
-A local dashboard that runs the whole acquisition pipeline, B2B and B2C, using only free tools:
+Find leads around the clock, research every company from its own website, and send a few personal, human-sounding emails each day from your own mailbox. It runs locally as a dashboard and uses only free tools: OpenStreetMap for leads, Groq for writing, and any SMTP/IMAP mailbox (Hostinger is preset).
 
-find leads → research their website → one personal email per lead (Groq AI) → send daily from Hostinger → handle replies.
+find leads → research their website → one plain, personal email per lead → send in small daily rounds with a warm-up → handle replies.
 
-HubSpot, Apollo and Clay are optional.
+B2B and B2C both work. HubSpot, Apollo and Clay are optional.
 
 ## Run it
 
@@ -36,6 +36,12 @@ Requires Node 22.13+ (uses the built-in `node:sqlite`). Data lives in `data/pipe
 - **Find & import**: local-business search for one city, pasted websites, CSV files (several at once) and the Clay webhook.
 - **Already contacted**: paste emails or domains you emailed with other tools. Your Hostinger Sent folder is read over IMAP. Either way, those people never get a second intro.
 - **Background jobs**: searches, imports, research and autopilot run on the server. Their progress shows in the sidebar on every page, so leaving a page never loses work.
+
+## How emails are written
+
+Each email is written for one company, from facts found on its own website: one specific thing they do, what you offer in one sentence, and one low-pressure question. The writer is told to sound like a person typing a quick note: 45–90 words, plain words, no flattery or sales jargon, no dashes, no copied pitch lines. Every AI draft goes through a quality check. Drafts that sound machine-written ("impressed by", "seamless", "explore how", a copied offer line, invented numbers, links…) get one rewrite with feedback, and otherwise fall back to your template. Optionally paste an email you wrote yourself in Settings → AI writing, and the AI matches its tone.
+
+In Outreach you can open the full email exactly as it will arrive, edit it, or click **Rewrite**. Turn on **Let me approve each email** (Settings → Autopilot) if you want to read every email before it can go out.
 
 ## Research, in short
 

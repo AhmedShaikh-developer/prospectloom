@@ -1,4 +1,4 @@
-/* Localhost Labs Pipeline — design tokens */
+/* ProspectLoom — design tokens */
 :root {
   --bg: #f7f7f8; --panel: #ffffff; --panel-2: #fbfbfc; --ink: #111318; --ink-2: #3a3f4b; --muted: #6b7280; --faint: #9aa0aa;
   --line: #e7e8ec; --line-2: #f0f1f4;
@@ -275,3 +275,10 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
 .b-other { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line, rgba(127,127,127,.25)); }
 
 .plan-strip { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
+
+.linkish { background: none; border: 0; padding: 4px 0 0; color: var(--brand); cursor: pointer; }
+.linkish:hover { text-decoration: underline; }
+.email-view { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); margin-bottom: 14px; overflow: hidden; }
+.ev-head { padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 13px; display: grid; gap: 4px; }
+.ev-head span { display: inline-block; width: 64px; color: var(--muted); }
+.ev-body { padding: 14px; white-space: pre-wrap; font-size: 14px; line-height: 1.6; color: var(--ink); max-height: 420px; overflow: auto; }

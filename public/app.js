@@ -1,4 +1,4 @@
-// Localhost Labs Pipeline — single-page dashboard (no build step).
+// ProspectLoom — single-page dashboard (no build step).
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const app = $('#app');
@@ -166,7 +166,9 @@ function autopilotCard(d, ap) {
       <div class="row"><button id="ap-run" data-testid="autopilot-run">${ic('play')}Prepare today's emails now</button>
       <button id="ap-toggle" class="${ap.enabled ? '' : 'primary'}" data-testid="autopilot-toggle">${ap.enabled ? 'Turn off' : `${ic('bolt')}Turn on autopilot`}</button></div></div>
     <p class="sub" style="margin:-4px 0 14px">${ap.enabled
-    ? `Every day it researches new leads, writes one email per lead${ap.ai ? ' with AI' : ' from your templates'}, and sends up to <strong>${t.limit}</strong> between <strong>${esc(ap.window)}</strong> (${esc(ap.timezone)}). Opt-outs, bounces and duplicates are always skipped.`
+    ? (ap.review
+      ? `Every day it researches new leads and writes one email per lead${ap.ai ? ' with AI' : ' from your templates'}, then <strong>waits for your approval</strong> in Outreach. Approved emails go out in rounds between <strong>${esc(ap.window)}</strong> (${esc(ap.timezone)}).`
+      : `Every day it researches new leads, writes one email per lead${ap.ai ? ' with AI' : ' from your templates'}, and sends up to <strong>${t.limit}</strong> in rounds between <strong>${esc(ap.window)}</strong> (${esc(ap.timezone)}) — no need to press Send. Opt-outs, bounces and duplicates are always skipped.`)
     : 'You approve each email by hand. Turn autopilot on to research, write and send every day automatically, within your daily limit.'}
       ${ap.ai ? '' : ' <a href="#/settings?tab=ai">Add a free Groq key</a> so every email is written for that lead.'}</p>
     <div class="ap-steps">
@@ -559,6 +561,7 @@ async function renderCompany({ id }) {
     if (!r) return;
     $('#studio-subject').value = r.subject;
     $('#studio-body').value = r.body;
+    if (r.problems?.length) toast(`Check before saving — ${r.problems.join('; ')}`, true);
   });
   $('#studio-save').onclick = (e) => act(e.currentTarget, () => POST(`/companies/${id}/custom-draft`, { subject: $('#studio-subject').value, body: $('#studio-body').value }), 'Draft saved — approve it in Outreach').then((r) => r && route());
 }
@@ -766,14 +769,17 @@ async function renderResearch() {
 }
 
 // ---------------------------------------------------------------- outreach (Phase 9)
+let AI_ON = false;
 async function renderOutreach() {
   const [quota, msgs, d, sent] = await Promise.all([GET('/outreach/quota'), GET('/outreach/messages?status=draft,approved,blocked'), GET('/dashboard'), GET('/outreach/messages?status=sent,bounced,failed,cancelled')]);
+  AI_ON = !!d.integrations.ai.configured;
   const row = (m) => `<tr data-testid="msg-row" data-status="${m.status}" data-id="${m.id}">
     <td><input type="checkbox" class="msel" value="${m.id}"></td>
     <td style="min-width:200px"><a href="#/company/${m.company_id}" class="cell-title">${esc(m.company_name)}</a><div class="cell-sub">${esc(m.to_email)}</div><div class="cell-sub">${esc(m.kind)} · fit ${m.fit_score ?? '—'}</div></td>
-    <td><div class="cell-title" style="margin-bottom:6px">${esc(m.subject)}</div><div class="msg-body clamp">${esc(m.body)}</div>${m.status_reason ? `<div class="small-t" style="color:var(--bad);margin-top:4px">${esc(m.status_reason)}</div>` : ''}</td>
+    <td><div class="cell-title" style="margin-bottom:6px">${esc(m.subject)}</div><div class="msg-body clamp" data-testid="msg-body">${esc(m.body)}</div>
+      <button type="button" class="linkish small-t toggle-full" data-testid="toggle-full">Show full email ▾</button>${m.status_reason ? `<div class="small-t" style="color:var(--bad);margin-top:4px">${esc(m.status_reason)}</div>` : ''}</td>
     <td>${badge(m.status)}</td>
-    <td class="num"><div class="grid" style="gap:6px"><button class="small edit" data-id="${m.id}">Preview / edit</button>${m.status === 'approved' ? `<button class="small primary send" data-id="${m.id}" data-testid="send-now">${ic('send')}Send now</button>` : ''}</div></td></tr>`;
+    <td class="num"><div class="grid" style="gap:6px"><button class="small edit" data-id="${m.id}" data-testid="preview">Preview / edit</button>${m.kind === 'intro' && AI_ON ? `<button class="small rewrite" data-id="${m.id}" data-testid="rewrite">${ic('sparkle')}Rewrite</button>` : ''}${m.status === 'approved' ? `<button class="small primary send" data-id="${m.id}" data-testid="send-now">${ic('send')}Send now</button>` : ''}</div></td></tr>`;
   app.innerHTML = `
     ${head('Outreach', 'Drafts → you approve → sent from your Hostinger mailbox within the daily limit. Every message is re-checked right before sending.')}
     ${d.compliance.ok ? '' : `<div class="alert sev-critical" data-testid="compliance-warning">${ic('alert')}<div class="grow"><strong>Compliance settings missing:</strong> ${esc(d.compliance.missing.join(', '))}.</div><a href="#/settings">Open settings →</a></div>`}
@@ -785,6 +791,7 @@ async function renderOutreach() {
     </div>
     <div class="card"><div class="card-head"><h2>Queue</h2><div class="row">
       <button id="cancel" class="danger ghost">Cancel selected</button>
+      ${d.integrations.ai.configured ? `<button id="rewrite-sel" data-testid="rewrite-selected">${ic('sparkle')}Rewrite selected</button>` : ''}
       <button id="gen-fu" data-testid="generate-followups">Generate follow-ups</button>
       <button id="approve" data-testid="approve-selected">${ic('check')}Approve selected</button>
       <button class="primary" id="gen" data-testid="generate-drafts">${ic('sparkle')}Generate today's drafts</button></div></div>
@@ -793,6 +800,10 @@ async function renderOutreach() {
     <div class="card"><h2>Sent log</h2><div class="table-wrap"><table data-testid="sent-table"><thead><tr><th>Company</th><th>Subject</th><th>Status</th><th>Sent</th></tr></thead>
       <tbody>${sent.map((m) => `<tr data-testid="sent-row"><td><a href="#/company/${m.company_id}" class="cell-title">${esc(m.company_name)}</a><div class="cell-sub">${esc(m.to_email)} · ${esc(m.kind)}</div></td><td>${esc(m.subject)}${m.status_reason ? `<div class="cell-sub">${esc(m.status_reason)}</div>` : ''}</td><td>${badge(m.status)}</td><td class="cell-sub">${fmtDate(m.sent_at)}</td></tr>`).join('') || `<tr><td colspan="4">${empty('Nothing sent yet')}</td></tr>`}</tbody></table></div></div>`;
   const selected = () => $$('.msel:checked').map((c) => Number(c.value));
+  $$('.toggle-full').forEach((b) => { b.onclick = () => { const box = b.previousElementSibling; const open = box.classList.toggle('clamp'); b.textContent = open ? 'Show full email ▾' : 'Show less ▴'; }; });
+  const rewrite = (btn, list) => act(btn, () => POST('/outreach/rewrite', { ids: list }), (r) => r.summary).then((r) => { if (r) { if (r.notes?.length) showResult({ report: r.notes.join('\n') }); route(); } });
+  $$('.rewrite').forEach((b) => { b.onclick = (e) => rewrite(e.currentTarget, [Number(b.dataset.id)]); });
+  if ($('#rewrite-sel')) $('#rewrite-sel').onclick = (e) => { const list = selected(); if (!list.length) return toast('Select emails first', true); rewrite(e.currentTarget, list); };
   $('#msel-all').onchange = (e) => $$('.msel').forEach((c) => { c.checked = e.target.checked; });
   $('#gen').onclick = (e) => act(e.currentTarget, () => POST('/outreach/drafts', {}), (r) => `${r.created} draft(s) created`).then((r) => r && route());
   $('#gen-fu').onclick = (e) => act(e.currentTarget, () => POST('/outreach/followups'), (r) => `${r.created} follow-up draft(s)`).then((r) => r && route());
@@ -808,11 +819,12 @@ async function renderOutreach() {
   $$('.edit').forEach((b) => {
     b.onclick = async () => {
       const m = await GET('/outreach/preview/' + b.dataset.id);
-      const body = modal(`<h2>Message to ${esc(m.to_email)}</h2>
+      const body = modal(`<h2>Email to ${esc(m.to_email)}</h2>
         <div class="alert ${m.eligibility.ok ? '' : 'sev-critical'}">${ic(m.eligibility.ok ? 'check' : 'alert')}<div class="grow">${m.eligibility.ok ? 'Passes all pre-send checks' : `Blocked: ${esc(m.eligibility.reasons.join('; '))}`}</div></div>
-        <form id="edit-form"><div class="field"><label>Subject</label><input name="subject" value="${esc(m.subject)}" data-testid="edit-subject"></div>
-        <div class="field"><label>Body</label><textarea name="body" style="min-height:220px" data-testid="edit-body">${esc(m.body)}</textarea></div>
-        <h3>Footer added automatically</h3><pre>${esc(m.fullText.slice(m.body.length).trim())}</pre>
+        <h3>Exactly what they will receive</h3>
+        <div class="email-view" data-testid="email-view"><div class="ev-head"><div><span>From</span>${esc(m.from || '')}</div><div><span>To</span>${esc(m.to_email)}</div><div><span>Subject</span><strong>${esc(m.subject)}</strong></div></div><div class="ev-body">${esc(m.fullText)}</div></div>
+        <form id="edit-form"><h3>Edit</h3><div class="field"><label>Subject</label><input name="subject" value="${esc(m.subject)}" data-testid="edit-subject"></div>
+        <div class="field"><label>Body</label><textarea name="body" style="min-height:260px" data-testid="edit-body">${esc(m.body)}</textarea></div>
         <div class="row mt" style="justify-content:flex-end"><button type="button" data-close>Close</button>${['draft', 'approved', 'blocked'].includes(m.status) ? '<button class="primary" data-testid="save-draft">Save (returns to draft)</button>' : ''}</div></form>`);
       $('#edit-form', body).onsubmit = async (e) => {
         e.preventDefault();
@@ -990,6 +1002,7 @@ async function renderSettings({ params = {} } = {}) {
       <div class="grid g2">${f('sender_name', 'Sender name')}${f('sender_title', 'Sender title')}${f('sender_email', 'Sender email (your Hostinger mailbox)')}${f('sender_company', 'Company')}${f('sender_website', 'Website')}${f('sender_postal_address', 'Physical postal address')}</div>${f('unsubscribe_text', 'Opt-out line')}</div>`,
     schedule: `<div class="card" data-testid="autopilot-settings"><h2>${ic('bolt')}Autopilot</h2><p class="sub" style="margin:-6px 0 14px">When on, it researches new leads, writes one email per lead (with AI if a Groq key is set), approves emails that pass every check, and sends them within the limits below. The app must be running.</p>
       ${f('autopilot_enabled', 'Run the whole pipeline automatically every day', { type: 'checkbox' })}
+      ${f('autopilot_review', 'Let me approve each email before it goes out (autopilot still finds, researches and writes)', { type: 'checkbox' })}
       <div class="grid g2">${f('pipeline_mode', 'Research rules', { type: 'select', options: { simple: 'Simple — automatic; decision-maker optional (recommended)', strict: 'Strict — every fact verified by hand, incl. decision-maker' } })}
       ${f('send_timezone', 'Send in this timezone (your recipients’)', { type: 'select', options: Object.fromEntries(TIMEZONES) })}</div>
       ${f('allow_provider_emails', 'Also email addresses that come from Clay, Apollo or your CSV files (the email must be on the company’s own domain; mailboxes are not validated, so bounces are watched)', { type: 'checkbox' })}
@@ -1011,6 +1024,7 @@ async function renderSettings({ params = {} } = {}) {
       <h3>Offer A</h3>${f('template_a_subject', 'Subject')}${f('template_a_body', 'Body', { type: 'textarea' })}<h3>Offer B</h3>${f('template_b_subject', 'Subject')}${f('template_b_body', 'Body', { type: 'textarea' })}<h3>Offer C (local / B2C)</h3>${f('template_c_subject', 'Subject')}${f('template_c_body', 'Body', { type: 'textarea' })}<h3>Follow-up</h3>${f('template_followup_body', 'Body', { type: 'textarea' })}</div>`,
     ai: `<div class="card"><h2>${ic('sparkle')}AI email writing (Groq — free)</h2><p class="sub" style="margin:-6px 0 14px">Groq's free tier writes each email from the facts research verified on the lead's own website. Nothing to install. Emails that fail the quality check (placeholders, links, invented numbers, wrong length) fall back to your template.</p>
       ${f('ai_writing', 'Write emails with AI when a key is set', { type: 'checkbox' })}
+      ${f('writing_style_example', 'Optional: paste an email you wrote yourself — the AI copies its tone and length, never its content', { type: 'textarea', ph: 'Hi Sam,\n\nSaw the new booking page on your site...\n\nAhmed' })}
       <div class="grid g2">${f('groq_api_key', 'Groq API key (or GROQ_API_KEY in .env)', { type: 'password' })}${f('groq_model', 'Model', { type: 'select', options: { 'openai/gpt-oss-120b': 'openai/gpt-oss-120b (best writing)', 'openai/gpt-oss-20b': 'openai/gpt-oss-20b (faster, higher free limits)', 'qwen/qwen3.8-27b': 'qwen/qwen3.8-27b' } })}</div>
       <div class="row">${testBtn('ai', 'Test AI', 'test-ai')}<a href="https://console.groq.com/keys" target="_blank" rel="noopener" class="small-t">Get a free key →</a></div></div>`,
     integrations: `<div class="grid g2">
@@ -1091,6 +1105,7 @@ async function renderSettings({ params = {} } = {}) {
 // ---------------------------------------------------------------- boot
 (async function boot() {
   META = await GET('/meta');
+  GET('/settings').then((s) => { if (s.sender_company) $('#brand-sub').textContent = s.sender_company; }).catch(() => {});
   if (META.testMode) $('#mode-badge').innerHTML = '<span class="badge b-warn">TEST MODE — emails captured, not sent</span>';
   route();
   pollJobs();

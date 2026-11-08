@@ -1,3 +1,4 @@
+import { upgradeDefaultTemplates } from './lib/settings.js';
 import express from 'express';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -39,7 +40,7 @@ if (config.dashboardPassword) {
     const [, b64] = String(req.get('authorization') || '').split(' ');
     const pass = b64 ? Buffer.from(b64, 'base64').toString().split(':').slice(1).join(':') : '';
     if (pass === config.dashboardPassword) return next();
-    res.set('WWW-Authenticate', 'Basic realm="Localhost Labs Pipeline"').status(401).send('Authentication required');
+    res.set('WWW-Authenticate', 'Basic realm="ProspectLoom"').status(401).send('Authentication required');
   });
 }
 
@@ -48,7 +49,8 @@ app.use(express.static(path.join(ROOT, 'public')));
 app.get('*', (req, res) => res.sendFile(path.join(ROOT, 'public', 'index.html')));
 
 recoverJobs();
+upgradeDefaultTemplates();
 app.listen(config.port, config.host, () => {
-  console.log(`Localhost Labs Pipeline → http://${config.host}:${config.port}${config.testMode ? '  [TEST MODE]' : ''}`);
+  console.log(`ProspectLoom → http://${config.host}:${config.port}${config.testMode ? '  [TEST MODE]' : ''}`);
   if (config.schedulerEnabled) startScheduler();
 });

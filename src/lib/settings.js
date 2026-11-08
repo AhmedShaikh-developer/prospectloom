@@ -46,7 +46,7 @@ export const DEFAULT_SETTINGS = {
   // Sender identity + commercial-email compliance (CAN-SPAM)
   sender_name: '',
   sender_title: '',
-  sender_company: 'Localhost Labs',
+  sender_company: '',
   sender_email: '',
   sender_postal_address: '',
   sender_website: '',
@@ -95,46 +95,44 @@ export const DEFAULT_SETTINGS = {
   // AI email writing via Groq (free tier). Used whenever a Groq API key is set.
   ai_writing: '1',
   groq_model: 'openai/gpt-oss-120b',
+  writing_style_example: '',   // optional: an email you wrote yourself; the AI copies its tone, never its content
+  autopilot_review: '0',       // 1 = autopilot writes, you approve each email before it can be sent
 
   // Templates (Phase 9). Variables: {{first_name}} {{company}} {{personalization}} {{offer_pitch}} {{sender_name}} ...
-  template_a_subject: 'Quick idea for {{company}}',
+  template_a_subject: 'idea for {{company}}',
   template_a_body: `Hi {{first_name}},
 
 {{personalization}}
 
-I run {{sender_company}} — {{offer_pitch}} {{angle}}
+I run {{sender_company}}. {{offer_pitch}} {{angle}}
 
-Would a 20-minute call to see if there's a fit be useful?
+Is this something you ever need a hand with?
 
-Best,
 {{sender_name}}`,
-  template_b_subject: 'White-label dev capacity for {{company}}',
+  template_b_subject: 'extra dev help for {{company}}',
   template_b_body: `Hi {{first_name}},
 
 {{personalization}}
 
 I run {{sender_company}}. {{offer_pitch}} {{angle}}
 
-Open to a short call to see whether we'd be a useful overflow partner?
+Do you ever need extra hands on the technical side of client projects?
 
-Best,
 {{sender_name}}`,
-  template_c_subject: 'Quick idea for {{company}}',
+  template_c_subject: '{{company}} website',
   template_c_body: `Hi {{first_name}},
 
 {{personalization}}
 
-I run {{sender_company}} — {{offer_pitch}} {{angle}}
+I run {{sender_company}}. {{offer_pitch}} {{angle}}
 
-Would it be worth a quick 15-minute call?
+Would it help if I sent over a couple of ideas?
 
-Best,
 {{sender_name}}`,
   template_followup_body: `Hi {{first_name}},
 
-Just floating this back up in case it got buried. Happy to share a couple of relevant examples if useful — or if the timing's wrong, no worries at all.
+Just bumping this up in case it got buried. If the timing's off, no problem at all.
 
-Best,
 {{sender_name}}`,
 };
 
@@ -190,4 +188,53 @@ export function saveSettings(obj) {
 
 export function getStageMap() {
   try { return JSON.parse(getSetting('hubspot_stage_map')); } catch { return {}; }
+}
+
+// Templates saved unchanged from an older default are upgraded to the current default on start.
+const OLD_TEMPLATE_DEFAULTS = {
+  template_a_subject: 'Quick idea for {{company}}',
+  template_a_body: `Hi {{first_name}},
+
+{{personalization}}
+
+I run {{sender_company}} — {{offer_pitch}} {{angle}}
+
+Would a 20-minute call to see if there's a fit be useful?
+
+Best,
+{{sender_name}}`,
+  template_b_subject: 'White-label dev capacity for {{company}}',
+  template_b_body: `Hi {{first_name}},
+
+{{personalization}}
+
+I run {{sender_company}}. {{offer_pitch}} {{angle}}
+
+Open to a short call to see whether we'd be a useful overflow partner?
+
+Best,
+{{sender_name}}`,
+  template_c_subject: 'Quick idea for {{company}}',
+  template_c_body: `Hi {{first_name}},
+
+{{personalization}}
+
+I run {{sender_company}} — {{offer_pitch}} {{angle}}
+
+Would it be worth a quick 15-minute call?
+
+Best,
+{{sender_name}}`,
+  template_followup_body: `Hi {{first_name}},
+
+Just floating this back up in case it got buried. Happy to share a couple of relevant examples if useful — or if the timing's wrong, no worries at all.
+
+Best,
+{{sender_name}}`,
+};
+export function upgradeDefaultTemplates() {
+  for (const [key, old] of Object.entries(OLD_TEMPLATE_DEFAULTS)) {
+    const row = q.get('SELECT value FROM settings WHERE key = :key', { key });
+    if (row && row.value === old) setSetting(key, DEFAULT_SETTINGS[key]);
+  }
 }

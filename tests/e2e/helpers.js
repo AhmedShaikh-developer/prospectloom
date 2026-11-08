@@ -6,8 +6,8 @@ export const SITE = { acme: 'http://127.0.0.1:4511', pixel: 'http://127.0.0.1:45
 export const COMPLIANCE = {
   sender_name: 'Alex Rivera',
   sender_title: 'Founder',
-  sender_email: 'alex@localhostlabs.dev',
-  sender_company: 'Localhost Labs',
+  sender_email: 'alex@acmestudio.dev',
+  sender_company: 'Acme Studio',
   sender_postal_address: '1 Test Plaza, Suite 100, Wilmington, DE 19801',
   unsubscribe_text: 'Reply "unsubscribe" and I will not contact you again.',
 };

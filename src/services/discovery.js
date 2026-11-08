@@ -35,7 +35,7 @@ const ALIASES = {
   personalization: ['personalization', 'personalisation', 'icebreaker', 'suggestedoutreachhook', 'suggestedpartnershipoutreachhook', 'outreachhook', 'opener'],
   personalization_url: ['personalizationurl', 'personalizationsource', 'primaryevidenceurl'],
   fit_score: ['leadscore110', 'leadscore10', 'leadscore', 'fitscore', 'score'],
-  fit_rationale: ['whylocalhostlabsfits', 'whythisagencyisagoodpartner', 'fitrationale'],
+  fit_rationale: [/^why.+fits?$/, 'whythisagencyisagoodpartner', 'fitrationale'],
   notes: ['notes', 'note', 'researchnotes'],
 };
 
@@ -46,7 +46,7 @@ export function detectMapping(headers) {
   for (const h of headers) {
     const k = key(h);
     for (const [field, aliases] of Object.entries(ALIASES)) {
-      if (aliases.includes(k) && !Object.values(map).includes(field)) { map[h] = field; break; }
+      if (aliases.some((a) => (a instanceof RegExp ? a.test(k) : a === k)) && !Object.values(map).includes(field)) { map[h] = field; break; }
     }
   }
   return map;

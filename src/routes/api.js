@@ -127,7 +127,7 @@ api.post('/companies/:id/personalize', h((req) => {
   if (!s) throw new Error('Suggestion not found');
   return companies.updateCompany(id, { personalization: s.text, personalization_url: s.source_url });
 }));
-api.post('/companies/:id/ai-draft', h((req) => outreach.aiDraft(Number(req.params.id))));
+api.post('/companies/:id/ai-draft', h((req) => outreach.writeEmail(Number(req.params.id))));
 api.post('/companies/:id/custom-draft', h((req) => outreach.createCustomDraft(Number(req.params.id), req.body)));
 
 // ---------- Deliverability: check your own sending domain ----------
@@ -214,7 +214,7 @@ api.post('/finder/import', h(async (req) => {
 
 // ---------- Autopilot ----------
 api.post('/autopilot/run', h(() => jobs.trackJob('autopilot', "Autopilot: preparing today's emails", {}, (ctx) => outreach.runAutopilot({ actor: 'user', onProgress: ctx.progress })
-  .then((r) => ({ ...r, summary: `${r.approved} email(s) approved to send · ${r.aiWritten} written by AI` })))));
+  .then((r) => ({ ...r, summary: r.held != null ? `${r.held} email(s) written and waiting for your approval · ${r.aiWritten} written by AI` : `${r.approved} email(s) approved to send · ${r.aiWritten} written by AI` })))));
 
 // ---------- Background jobs ----------
 api.get('/jobs', h((req) => jobs.listJobs(req.query)));
@@ -243,7 +243,7 @@ api.post('/engine/run', h(() => {
   return { jobId: engine.runTarget(t).jobId };
 }));
 api.get('/autopilot/status', h(() => ({
-  enabled: getBool('autopilot_enabled'), ai: ai.isEnabled(), mode: getSetting('pipeline_mode'),
+  enabled: getBool('autopilot_enabled'), review: getBool('autopilot_review'), ai: ai.isEnabled(), mode: getSetting('pipeline_mode'),
   inWindow: outreach.inSendWindow(), timezone: getSetting('send_timezone'),
   window: `${getSetting('send_window_start')}:00–${getSetting('send_window_end')}:00`,
 })));
@@ -288,10 +288,16 @@ api.put('/outreach/messages/:id', h((req) => { outreach.updateDraft(Number(req.p
 api.post('/outreach/approve', h((req) => outreach.approveMessages(ids(req.body.ids))));
 api.post('/outreach/cancel', h((req) => ({ cancelled: outreach.cancelMessages(ids(req.body.ids)) })));
 api.post('/outreach/send/:id', h((req) => outreach.sendOne(Number(req.params.id))));
+api.post('/outreach/rewrite', h((req) => {
+  const list = ids(req.body.ids || []);
+  if (!list.length) throw new Error('Select the emails to rewrite first');
+  return jobs.trackJob('autopilot', `Rewriting ${list.length} email(s)`, {}, (ctx) => outreach.rewriteMessages(list, { onProgress: ctx.progress })
+    .then((r) => ({ ...r, summary: `${r.rewritten} rewritten${r.kept ? ` · ${r.kept} kept as they were` : ''}` })));
+}));
 api.get('/outreach/preview/:id', h((req) => {
   const m = q.get('SELECT * FROM messages WHERE id = :id', { id: Number(req.params.id) });
   if (!m) throw new Error('Message not found');
-  return { ...m, fullText: `${m.body}\n\n${outreach.footer(m.unsubscribe_token)}`, eligibility: outreach.checkEligibility(m) };
+  return { ...m, from: `${getSetting('sender_name')} <${getSetting('sender_email')}>`, fullText: `${m.body}\n\n${outreach.footer(m.unsubscribe_token)}`, eligibility: outreach.checkEligibility(m) };
 }));
 
 // ---------- Phase 10: replies & pipeline ----------

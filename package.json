@@ -1,8 +1,8 @@
 {
-  "name": "localhost-labs-pipeline",
+  "name": "prospectloom",
   "version": "1.0.0",
   "private": true,
-  "description": "Localhost Labs B2B client acquisition pipeline: research, verification, CRM sync, outreach and reply handling.",
+  "description": "Find leads around the clock, research each company from its own website, and send a few personal, human-sounding emails every day from your own mailbox. Free stack: OpenStreetMap, Groq, any SMTP/IMAP mailbox.",
   "type": "module",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/server.js",

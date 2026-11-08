@@ -19,10 +19,24 @@ export function render(template, vars) {
   return String(template).replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (_, k) => (vars[k] ?? '').toString());
 }
 
+/**
+ * Does this person's name fit the email address? (kirk@ → Kirk James, nserrano@ → Nancy Serrano.)
+ * Lead lists sometimes pair one person's name with a colleague's address — never greet the wrong person.
+ */
+export function nameFitsEmail(name, email) {
+  const local = String(email || '').split('@')[0].toLowerCase().replace(/[^a-z]/g, '');
+  const parts = String(name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z\s]/g, '').split(/\s+/).filter(Boolean);
+  if (!local || !parts.length) return false;
+  const first = parts[0]; const last = parts[parts.length - 1];
+  if (first.length >= 3 && local.includes(first)) return true;
+  if (parts.length > 1 && last.length >= 3 && local.includes(last)) return true;
+  return parts.length > 1 && [first[0] + last, first + last[0], last + first[0]].includes(local);
+}
+
 function firstName(c) {
   const n = String(c.dm_name || '').trim().split(/\s+/)[0];
-  // Only address the person by name when the recipient IS the decision-maker.
-  return c.email_contact_type === 'decision_maker' && n ? n : 'there';
+  // Only address the person by name when the recipient IS that person.
+  return c.email_contact_type === 'decision_maker' && n && nameFitsEmail(c.dm_name, c.contact_email) ? n : 'there';
 }
 
 export function footer(token) {
@@ -410,7 +424,7 @@ export function studio(companyId) {
   };
 }
 
-export async function aiDraft(companyId) {
+export async function aiDraft(companyId, opts = {}) {
   if (!ai.isEnabled()) throw new Error('AI writing is off. Add your free Groq API key in Settings → AI writing.');
   const c = getCompany(companyId);
   if (!c) throw new Error('Company not found');
@@ -419,7 +433,35 @@ export async function aiDraft(companyId) {
   return ai.draftEmail({
     company: c, facts: verifiedFacts(c), angle: angleFor(c), b2c: c.offer === 'C',
     offerPitch: getSetting(`offer_${offer}_pitch`), senderName: getSetting('sender_name'), senderCompany: getSetting('sender_company'),
+    styleExample: getSetting('writing_style_example'), feedback: opts.feedback, greetName: firstName(c),
   });
+}
+
+/**
+ * Write one email with AI and check it. A draft that sounds machine-written gets one rewrite with the
+ * reasons as feedback. Returns { subject, body, problems } — problems is empty when it passed.
+ */
+export async function writeEmail(companyId) {
+  const c = getCompany(companyId);
+  let d = await aiDraft(companyId);
+  let problems = validateDraft(d, c);
+  if (problems.length) {
+    const second = await aiDraft(companyId, { feedback: problems.join('; ') });
+    const p2 = validateDraft(second, c);
+    if (p2.length <= problems.length) { d = second; problems = p2; }
+  }
+  return { ...d, problems };
+}
+
+// Words and phrases that make an email read as AI- or template-written.
+const AI_TELLS = /\b(impressed|amazing|stunning|vibrant|award[- ]winning|innovative|cutting[- ]edge|world[- ]class|delve|leverag\w*|elevat\w*|seamless\w*|streamlin\w*|synerg\w*|empower\w*|unlock\w*|robust|game[- ]changer|touch base|reach out|circle back|i came across|hope this (email )?finds you|at the forefront|testament|blend(s|ing)?|explore how|brief call to explore|strategic depth|design depth)\b/gi;
+
+/** True when `a` repeats any run of n consecutive words from `b`. */
+export function sharesPhrase(a, b, n = 7) {
+  const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+  const wa = norm(a).join(' '); const wb = norm(b);
+  for (let i = 0; i + n <= wb.length; i++) if (wa.includes(wb.slice(i, i + n).join(' '))) return true;
+  return false;
 }
 
 /** Automatic quality gate for AI-written emails sent without a human edit. Returns a list of problems. */
@@ -434,6 +476,13 @@ export function validateDraft({ subject, body }, c = {}) {
   if (/unsubscribe|opt[- ]out/i.test(b)) problems.push('contains its own opt-out line (added automatically)');
   if (/!/.test(b)) problems.push('contains an exclamation mark');
   if (/\b(as an ai|language model|i cannot)\b/i.test(b)) problems.push('model meta-text');
+  const tells = (b.match(AI_TELLS) || []).map((x) => x.toLowerCase());
+  if (tells.length) problems.push(`sounds machine-written ("${[...new Set(tells)].slice(0, 3).join('", "')}")`);
+  if (/\b(collaboration|opportunity|synergy)\b/i.test(s)) problems.push('salesy subject');
+  if (/[\u2014\u2013;]/.test(b)) problems.push('dashes or semicolons');
+  const offer = c.offer ? getSetting(`offer_${offerKey(c.offer)}_pitch`) : '';
+  if (offer && sharesPhrase(b, offer, 7)) problems.push('copies the offer description word for word');
+  if (words > 130) problems.push('too long for a first email');
   if (/\$\s?\d|\d+\s?%/.test(b) && !/\$\s?\d|\d+\s?%/.test(`${c.description || ''} ${c.personalization || ''}`)) problems.push('mentions a number/percentage not in the facts');
   const sender = String(getSetting('sender_name') || '').split(' ')[0];
   if (sender && !b.includes(sender)) problems.push('missing sign-off');
@@ -459,9 +508,8 @@ export async function runAutopilot({ actor = 'autopilot', onProgress } = {}) {
       const m = q.get('SELECT * FROM messages WHERE id = :id', { id });
       const c = getCompany(m.company_id);
       try {
-        const d = await aiDraft(c.id);
-        const problems = validateDraft(d, c);
-        if (problems.length) { out.aiRejected++; out.notes.push(`${c.name}: AI draft rejected (${problems.join(', ')}) — template used`); continue; }
+        const d = await writeEmail(c.id);
+        if (d.problems.length) { out.aiRejected++; out.notes.push(`${c.name}: AI draft rejected (${d.problems.join(', ')}) — template used`); continue; }
         q.run('UPDATE messages SET subject = :subject, body = :body WHERE id = :id', { subject: d.subject, body: d.body, id });
         out.aiWritten++;
       } catch (e) {
@@ -470,13 +518,45 @@ export async function runAutopilot({ actor = 'autopilot', onProgress } = {}) {
       }
     }
   } else if (fresh.length) out.notes.push('No Groq key — emails use your templates');
-  const appr = approveMessages([...waiting, ...fresh]);
-  out.approved = appr.approved.length; out.blocked = appr.blocked.length;
-  if (getBool('followup_enabled')) {
-    const fu = generateFollowups();
-    out.followups = approveMessages(fu.ids).approved.length;
+  if (getBool('autopilot_review')) {
+    // Review mode: autopilot finds, researches and writes; you approve each email before it can be sent.
+    out.held = waiting.length + fresh.length;
+    if (getBool('followup_enabled')) out.followups = generateFollowups().ids.length;
+    out.notes.push(`${out.held} email(s) waiting for your approval in Outreach`);
+  } else {
+    const appr = approveMessages([...waiting, ...fresh]);
+    out.approved = appr.approved.length; out.blocked = appr.blocked.length;
+    if (getBool('followup_enabled')) {
+      const fu = generateFollowups();
+      out.followups = approveMessages(fu.ids).approved.length;
+    }
   }
   logActivity(null, 'autopilot', out, actor);
+  return out;
+}
+
+/**
+ * Rewrite queued (not yet sent) intros with the current writing rules. A message keeps its status
+ * when the new version passes the quality check; otherwise it stays as it was.
+ */
+export async function rewriteMessages(ids, { onProgress } = {}) {
+  const out = { rewritten: 0, kept: 0, notes: [] };
+  for (const [i, id] of ids.entries()) {
+    const m = q.get("SELECT * FROM messages WHERE id = :id AND kind = 'intro' AND status IN ('draft','approved','blocked')", { id });
+    if (!m) continue;
+    const c = getCompany(m.company_id);
+    onProgress?.(i, ids.length, `Rewriting the email to ${c?.name || m.to_email}`);
+    try {
+      const d = await writeEmail(m.company_id);
+      if (d.problems.length) { out.kept++; out.notes.push(`${c.name}: new draft still had problems (${d.problems.join(', ')}) — kept the current one`); continue; }
+      q.run('UPDATE messages SET subject = :subject, body = :body WHERE id = :id', { subject: d.subject, body: d.body, id });
+      logActivity(m.company_id, 'message_rewritten', { messageId: id }, 'user');
+      out.rewritten++;
+    } catch (e) {
+      out.notes.push(`${c?.name || id}: ${e.message}`);
+      if (/rate limit|reach Groq|rejected the API key|AI writing is off/.test(e.message)) break;
+    }
+  }
   return out;
 }
 
