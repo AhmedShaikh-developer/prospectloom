@@ -14,6 +14,7 @@ import { angleFor } from '../lib/angles.js';
 import { suggestions } from '../lib/personalization.js';
 import * as ai from '../integrations/ai.js';
 import { offerKey } from '../lib/offers.js';
+import { platformOf } from './performance.js';
 
 export function render(template, vars) {
   return String(template).replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (_, k) => (vars[k] ?? '').toString());
@@ -158,8 +159,10 @@ export function listMessages({ status, kind, limit = 300 } = {}) {
   const where = []; const p = { limit };
   if (status) { where.push(`m.status IN (${status.split(',').map((_, i) => ':s' + i).join(',')})`); status.split(',').forEach((s, i) => { p['s' + i] = s; }); }
   if (kind) { where.push('m.kind = :kind'); p.kind = kind; }
-  return q.all(`SELECT m.*, c.name AS company_name, c.domain, c.fit_score, c.offer FROM messages m JOIN companies c ON c.id = m.company_id
-    ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY m.id DESC LIMIT :limit`, p);
+  return q.all(`SELECT m.*, c.name AS company_name, c.domain, c.fit_score, c.offer, c.lead_origin,
+      (SELECT r.classification FROM replies r WHERE r.company_id = m.company_id AND r.classification IN ('positive','neutral','negative','opt_out') ORDER BY r.id DESC LIMIT 1) AS reply_class
+    FROM messages m JOIN companies c ON c.id = m.company_id
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY m.id DESC LIMIT :limit`, p).map((m) => ({ ...m, platform: platformOf(m.lead_origin) }));
 }
 
 export function updateDraft(id, { subject, body, to_email }) {

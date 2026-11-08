@@ -142,6 +142,7 @@ const routes = {
   setup: renderSetup,
   settings: renderSettings,
   integrations: renderIntegrations,
+  performance: renderPerformance,
 };
 
 // Page changes take turns: a slow page that finishes late can never overwrite the page you opened after it.
@@ -239,7 +240,8 @@ const STATE_BADGE = {
   waiting_credits: ['warn', 'Waiting for credits'], rate_limited: ['warn', 'Paused · rate limit'], plan: ['bad', 'Not in your plan'], auth: ['bad', 'Key rejected'], error: ['warn', 'Retrying'],
 };
 const deltaChip = (cur, prev) => {
-  if (!prev) return cur ? '<span class="delta">new</span>' : '<span class="delta flat">—</span>';
+  // A percentage against an almost-empty previous period means nothing — call it new.
+  if (!prev || prev < 20) return cur ? '<span class="delta">new</span>' : '<span class="delta flat">—</span>';
   const p = Math.round(((cur - prev) / prev) * 100);
   return `<span class="delta ${p < 0 ? 'down' : p === 0 ? 'flat' : ''}">${p > 0 ? '↗' : p < 0 ? '↘' : ''} ${Math.abs(p)}%</span>`;
 };
@@ -311,16 +313,16 @@ async function renderDashboard() {
   const pct = (v) => `${Math.round(((v || 0) / compTotal) * 1000) / 10}%`;
 
   const sourcesHtml = [
-    ...ov.sources.map((s) => ({ g: s.g, label: s.label, value: s.total, sub: `${n(s.ready)} ready · ${n(s.contacted)} contacted`, spark: s.spark, state: ov.sourceStates.find((x) => x.name === s.g) })),
+    ...ov.sources.map((s) => ({ g: s.g, label: s.label, value: s.total, sub: `${n(s.ready)} ready · ${n(s.contacted)} emailed · ${n(s.replied)} replied`, spark: s.spark, replyRate: s.replyRate, state: ov.sourceStates.find((x) => x.name === s.g) })),
     ...ov.sourceStates.filter((s) => s.configured && !ov.sources.some((x) => x.g === s.name)).map((s) => ({ g: s.name, label: s.label, value: s.name === 'hunter' ? s.found : s.imported, sub: s.message || (s.enabled ? 'connected' : 'connected · auto-pull off'), spark: null, state: s })),
   ].map((s) => {
     const look = SOURCE_LOOK[s.g] || SOURCE_LOOK.manual;
     const st = s.state && s.state.configured ? (s.state.enabled ? STATE_BADGE[s.state.status] || STATE_BADGE.idle : ['', 'Auto-pull off']) : null;
-    return `<a class="src" href="${s.g === 'osm' ? '#/engine' : ['apollo', 'hunter', 'hubspot', 'clay'].includes(s.g) ? '#/integrations' : `#/companies?origin=${s.g === 'csv' ? 'csv' : s.g}`}">
+    return `<a class="src" href="#/performance">
       <span class="mono-ic" style="background:${look.bg}">${look.mono}</span>
       <div><div class="src-l">${esc(s.label)}</div><div class="src-n" data-count="${s.value || 0}">${n(s.value)}</div></div>
       ${s.spark ? chart({ type: 'spark', values: s.spark, color: 'var(--brand)' }, { height: 34, label: `${s.label}: new leads per day` }) : ''}
-      <div class="src-s"><span>${esc(s.sub)} ${look.unit === 'emails found' ? '· emails found' : ''}</span>${st ? badge(st[0], st[1]) : ''}</div></a>`;
+      <div class="src-s"><span>${esc(s.sub)} ${look.unit === 'emails found' ? '· emails found' : ''}</span>${st ? badge(st[0], st[1]) : s.replyRate ? badge('ok', `${s.replyRate}% reply`) : ''}</div></a>`;
   }).join('') + ov.sourceStates.filter((s) => !s.configured).map((s) => {
     const look = SOURCE_LOOK[s.name] || SOURCE_LOOK.manual;
     return `<a class="src ghost-src" href="#/integrations"><span class="mono-ic" style="background:${look.bg}">${look.mono}</span>
@@ -372,7 +374,7 @@ async function renderDashboard() {
         ${chart({ type: 'bars', labels: se.days, xFormat: 'date', series: [{ label: 'Sent', values: se.sent, color: 'var(--s1)' }, { label: 'Replies', values: se.replies, color: 'var(--s2)' }] }, { height: 210, label: 'Emails sent and replies per day' })}
         <p class="hint small-t" style="margin:6px 0 0">${ov.totals.sent ? `${n(ov.totals.sent)} sent in total · ${ov.replyRate}% reply rate` : 'Your first emails go out at today\'s first send time.'}</p></div>
 
-      <div class="card reveal span-12" data-testid="lead-sources"><div class="card-head"><h2>${ic('pin')}Lead sources</h2><a href="#/integrations" class="small-t">Manage integrations →</a></div>
+      <div class="card reveal span-12" data-testid="lead-sources"><div class="card-head"><h2>${ic('pin')}Lead sources</h2><div class="row"><a href="#/performance" class="small-t">Compare results →</a><a href="#/integrations" class="small-t">Manage integrations →</a></div></div>
         <div class="sources">${sourcesHtml}</div></div>
 
       <div class="card reveal span-4" data-testid="deliverability"><div class="card-head"><h2>${ic('shield')}Deliverability</h2>${badge(bounce.rate >= 5 ? 'bad' : bounce.rate >= 2 ? 'warn' : 'ok', bounceLabel)}</div>
@@ -532,7 +534,7 @@ async function renderCompanies({ params }) {
     <div class="table-wrap"><table data-testid="companies-table"><thead><tr><th style="width:36px"><input type="checkbox" id="sel-all"></th><th>Company</th><th>Status</th><th>Offer</th><th class="num">Fit</th><th>Contact</th><th>Decision-maker</th><th>Updated</th></tr></thead>
     <tbody>${rows.map((c) => `<tr data-testid="company-row" data-domain="${esc(c.domain)}">
       <td><input type="checkbox" class="sel" value="${c.id}"></td>
-      <td><a href="#/company/${c.id}" class="cell-title">${esc(c.name)}</a><div class="cell-sub">${esc(c.domain)}${c.lead_origin ? ` · ${esc(String(c.lead_origin).replace(/^csv: /, '').slice(0, 40))}` : ''}</div></td>
+      <td><a href="#/company/${c.id}" class="cell-title">${esc(c.name)}</a><div class="cell-sub">${esc(c.domain)}${c.platform ? ` · <span class="tag" title="${esc(c.lead_origin || '')}">${esc(c.platform)}</span>` : ''}</div></td>
       <td>${badge(c.status)}<div class="cell-sub" style="max-width:280px;margin-top:3px">${esc((c.status_reason || '').slice(0, 110))}</div></td>
       <td>${c.offer ? `<span class="tag">${esc(c.offer)}</span>` : '<span class="muted">—</span>'}</td><td class="num">${c.fit_score ?? '—'}</td>
       <td class="small-t">${esc(c.contact_email || '—')}</td>
@@ -965,8 +967,9 @@ async function renderOutreach() {
       <button class="primary" id="gen" data-testid="generate-drafts">${ic('sparkle')}Generate today's drafts</button></div></div>
       <div class="table-wrap"><table data-testid="queue-table"><thead><tr><th style="width:36px"><input type="checkbox" id="msel-all" data-testid="select-all-msgs"></th><th>Company</th><th>Message</th><th>Status</th><th></th></tr></thead>
       <tbody>${msgs.map(row).join('') || `<tr><td colspan="5">${empty('Queue is empty', ' — generate drafts from READY companies, or write one in a company’s Email studio.')}</td></tr>`}</tbody></table></div></div>
-    <div class="card"><h2>Sent log</h2><div class="table-wrap"><table data-testid="sent-table"><thead><tr><th>Company</th><th>Subject</th><th>Status</th><th>Sent</th></tr></thead>
-      <tbody>${sent.map((m) => `<tr data-testid="sent-row"><td><a href="#/company/${m.company_id}" class="cell-title">${esc(m.company_name)}</a><div class="cell-sub">${esc(m.to_email)} · ${esc(m.kind)}</div></td><td>${esc(m.subject)}${m.status_reason ? `<div class="cell-sub">${esc(m.status_reason)}</div>` : ''}</td><td>${badge(m.status)}</td><td class="cell-sub">${fmtDate(m.sent_at)}</td></tr>`).join('') || `<tr><td colspan="4">${empty('Nothing sent yet')}</td></tr>`}</tbody></table></div></div>`;
+    <div class="card"><h2>Sent log</h2><div class="table-wrap"><table data-testid="sent-table"><thead><tr><th>Company</th><th>Source</th><th>Subject</th><th>Status</th><th>Result</th><th>Sent</th></tr></thead>
+      <tbody>${sent.map((m) => `<tr data-testid="sent-row"><td><a href="#/company/${m.company_id}" class="cell-title">${esc(m.company_name)}</a><div class="cell-sub">${esc(m.to_email)} · ${esc(m.kind)}</div></td><td><span class="tag">${esc(m.platform || '—')}</span></td><td>${esc(m.subject)}${m.status_reason ? `<div class="cell-sub">${esc(m.status_reason)}</div>` : ''}</td><td>${badge(m.status)}</td>
+        <td data-testid="sent-result">${m.status === 'bounced' ? badge('bad', 'Bounced') : m.reply_class === 'positive' ? badge('ok', 'Replied · interested') : m.reply_class === 'opt_out' ? badge('bad', 'Opted out') : m.reply_class ? badge('info', `Replied · ${m.reply_class}`) : '<span class="muted small-t">No reply yet</span>'}</td><td class="cell-sub">${fmtDate(m.sent_at)}</td></tr>`).join('') || `<tr><td colspan="6">${empty('Nothing sent yet')}</td></tr>`}</tbody></table></div></div>`;
   const selected = () => $$('.msel:checked').map((c) => Number(c.value));
   $$('.toggle-full').forEach((b) => { b.onclick = () => { const box = b.previousElementSibling; const open = box.classList.toggle('clamp'); b.textContent = open ? 'Show full email ▾' : 'Show less ▴'; }; });
   const rewrite = (btn, list) => act(btn, () => POST('/outreach/rewrite', { ids: list }), (r) => r.summary).then((r) => { if (r) { if (r.notes?.length) showResult({ report: r.notes.join('\n') }); route(); } });
@@ -1268,6 +1271,41 @@ function wireIntegrations() {
   }
   mailboxStatus();
 
+}
+
+// ---------------------------------------------------------------- performance by source
+async function renderPerformance() {
+  const r = await GET('/performance');
+  const o = r.overall;
+  const pctTxt = (v) => `${v}%`;
+  const table = (rows, { title, tid, first = 'Source' }) => `<div class="card reveal" data-testid="${tid}"><h2>${title}</h2><div class="table-wrap"><table><thead><tr>
+      <th>${first}</th><th class="num">Leads</th><th class="num">With email</th><th class="num">Emailed</th><th class="num">Replied</th><th class="num">Interested</th><th class="num">Reply rate</th><th class="num">Bounce rate</th><th>Verdict</th></tr></thead><tbody>
+      ${rows.map((g) => `<tr><td class="cell-title">${esc(g.key)}</td><td class="num">${n(g.leads)}</td><td class="num">${n(g.withEmail)}</td><td class="num">${n(g.emailed)}</td><td class="num">${n(g.replied)}</td><td class="num">${n(g.positive)}</td>
+        <td class="num"><strong>${g.emailed ? pctTxt(g.replyRate) : '—'}</strong></td><td class="num">${g.emailed ? pctTxt(g.bounceRate) : '—'}</td><td>${g.verdict ? badge(g.verdict.tone, g.verdict.label) : ''}</td></tr>`).join('') || `<tr><td colspan="9">${empty('No data yet')}</td></tr>`}</tbody></table></div></div>`;
+  const withSent = r.byPlatform.filter((g) => g.emailed);
+  app.innerHTML = `${head('Performance', 'Which sources bring leads that actually reply. Every lead remembers where it came from, so you can find more of what works.')}
+    <div class="kpis" data-testid="perf-kpis">
+      <div class="card kpi"><div class="label"><span class="ico-chip">${ic('send')}</span>Emails sent</div><div class="value" data-count="${o.emailed}">${n(o.emailed)}</div><div class="hint">to ${n(o.leads)} leads in your list</div></div>
+      <div class="card kpi"><div class="label"><span class="ico-chip">${ic('inbox')}</span>Reply rate</div><div class="value">${o.replyRate}%</div><div class="hint">${n(o.replied)} companies replied</div></div>
+      <div class="card kpi"><div class="label"><span class="ico-chip">${ic('trend')}</span>Interested</div><div class="value">${o.positiveRate}%</div><div class="hint">${n(o.positive)} positive replies</div></div>
+      <div class="card kpi"><div class="label"><span class="ico-chip">${ic('shield')}</span>Bounce rate</div><div class="value">${o.bounceRate}%</div><div class="hint">${n(o.bounced)} bounced</div></div>
+    </div>
+    <div class="dash mt">
+      <div class="card insight reveal span-5" data-testid="perf-insights"><div class="card-head"><h2>${ic('sparkle')}What the numbers say</h2></div><ul>${r.insights.map((x) => `<li>${ic('arrow')}<span>${esc(x)}</span></li>`).join('')}</ul>
+        <p class="small-t muted" style="margin:14px 0 0">Sources are compared once each has about ${r.minSample} emails sent, so a lucky first reply doesn't mislead you.</p></div>
+      <div class="card reveal span-7"><div class="card-head"><h2>${ic('chart')}Reply rate by source</h2><span class="hint">% of emailed companies that replied</span></div>
+        ${withSent.length ? chart({ type: 'bars', labels: withSent.map((g) => g.key), series: [{ label: 'Reply rate', values: withSent.map((g) => g.replyRate), color: 'var(--s2)' }, { label: 'Interested', values: withSent.map((g) => g.positiveRate), color: 'var(--s1)' }], unit: '%', xTitle: 'Source' }, { height: 230, label: 'Reply rate and interested rate by lead source' })
+          + `<div class="legend mt"><span class="legend-i"><span class="sw" style="background:var(--s2)"></span>Reply rate</span><span class="legend-i"><span class="sw" style="background:var(--s1)"></span>Interested</span></div>` : empty('No emails sent yet', ' — the comparison appears after the first emails go out.')}</div>
+    </div>
+    <div class="stack mt">
+      ${table(r.byPlatform, { title: 'By source platform', tid: 'perf-platforms' })}
+      ${r.byFile.length ? `<div class="card reveal" data-testid="perf-files"><div class="card-head"><h2>${ic('file')}Your imported lists</h2><span class="hint">tell the app which platform each file came from</span></div><div class="table-wrap"><table><thead><tr><th>File</th><th>Came from</th><th class="num">Leads</th><th class="num">Emailed</th><th class="num">Replied</th><th class="num">Reply rate</th></tr></thead><tbody>
+        ${r.byFile.map((g) => `<tr><td class="mono small-t">${esc(g.file)}</td><td><select class="plat" data-origin="${esc(g.key)}" style="width:auto" data-testid="plat-select">${r.platforms.map((p) => `<option ${p === g.platform ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></td>
+          <td class="num">${n(g.leads)}</td><td class="num">${n(g.emailed)}</td><td class="num">${n(g.replied)}</td><td class="num">${g.emailed ? `${g.replyRate}%` : '—'}</td></tr>`).join('')}</tbody></table></div></div>` : ''}
+      <div class="grid g2">${table(r.byEmailSource, { title: 'By where the email came from', tid: 'perf-email-source', first: 'Email found on' })}${table(r.byContact, { title: 'By who received it', tid: 'perf-contact', first: 'Recipient' })}</div>
+      <div class="grid g2">${table(r.byOffer, { title: 'By offer', tid: 'perf-offer', first: 'Offer' })}${table(r.byIndustry, { title: 'By industry (top 10)', tid: 'perf-industry', first: 'Industry' })}</div>
+    </div>`;
+  $$('.plat').forEach((sel) => { sel.onchange = () => act(null, () => PUT('/performance/platform', { origin: sel.dataset.origin, platform: sel.value }), `Saved — leads from this file now count as ${sel.value}`).then((x) => x && route()); });
 }
 
 // ---------------------------------------------------------------- integrations hub

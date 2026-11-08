@@ -23,6 +23,7 @@ import * as jobs from '../services/jobs.js';
 import * as engine from '../services/engine.js';
 import * as sources from '../services/sources.js';
 import * as insights from '../services/insights.js';
+import * as performance from '../services/performance.js';
 import * as hunter from '../integrations/hunter.js';
 import { PRESETS } from '../lib/places.js';
 import { normalizeDomain as normDomain, emailDomain as emDomain } from '../lib/normalize.js';
@@ -67,6 +68,8 @@ api.get('/dashboard', h(() => ({
 api.get('/insights/missing', h(() => inv.topMissing(companies.evaluateCompany)));
 api.get('/insights/series', h((req) => insights.series(req.query.days)));
 api.get('/insights/overview', h(() => insights.overview()));
+api.get('/performance', h(() => performance.report()));
+api.put('/performance/platform', h((req) => ({ labels: performance.setPlatform(String(req.body?.origin || ''), req.body?.platform) })));
 
 // ---------- Phase 1: settings ----------
 api.get('/settings', h(() => getAllSettings()));

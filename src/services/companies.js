@@ -4,6 +4,7 @@ import { evaluate } from '../lib/qualification.js';
 import { getSetting, getNum, getBool } from '../lib/settings.js';
 import { findConflicts } from './suppression.js';
 import { STATUS } from '../lib/constants.js';
+import { platformOf } from './performance.js';
 
 // Fields a user (or importer) may set directly.
 export const EDITABLE_FIELDS = [
@@ -209,7 +210,7 @@ export function listCompanies({ status, offer, search, contacted, hasEmail, orig
   const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const rows = q.all(`SELECT * FROM companies ${w} ORDER BY ${order} LIMIT :limit OFFSET :offset`, p);
   const total = q.get(`SELECT COUNT(*) AS n FROM companies ${w}`, p).n;
-  return { rows, total };
+  return { rows: rows.map((c) => ({ ...c, platform: platformOf(c.lead_origin) })), total };
 }
 
 export function deleteCompany(id) {

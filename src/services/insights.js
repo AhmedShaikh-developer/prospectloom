@@ -2,6 +2,9 @@
 import { q } from '../db/index.js';
 import { warmupPlan, bounceGuard, sendPlan } from './outreach.js';
 import { listSources } from './sources.js';
+import { report, platformOf } from './performance.js';
+
+const PLATFORM_KEY = { 'Map listings': 'osm', Apollo: 'apollo', HubSpot: 'hubspot', Clay: 'clay', 'Added by hand': 'manual', 'Other list': 'csv' };
 
 const ORIGIN = `CASE
   WHEN lead_origin = 'openstreetmap' THEN 'osm'
@@ -62,10 +65,14 @@ export function overview() {
       SUM(site_status = 'blocked' AND status IN ('RESEARCHING','HOLD_VERIFY')) AS blocked,
       SUM(status IN ('EXCLUDED','DO_NOT_CONTACT','BOUNCED','MANUAL_APPLICATION')) AS out
     FROM companies`);
-  const sources = q.all(`SELECT ${ORIGIN} AS g, COUNT(*) AS total, SUM(status = 'READY') AS ready, SUM(status IN ('SENT','FOLLOW_UP','REPLIED')) AS contacted
-    FROM companies GROUP BY g ORDER BY total DESC`).map((r) => ({ ...r, label: ORIGIN_LABELS[r.g] || r.g }));
-  const spark = series(14);
-  for (const s of sources) s.spark = spark.leads[s.g] || spark.days.map(() => 0);
+  // Lead sources by platform (imported files count under the platform you labelled them with)
+  const perf = report();
+  const days = series(14).days;
+  const recent = q.all(`SELECT lead_origin, date(created_at, 'localtime') AS d, COUNT(*) AS n FROM companies WHERE date(created_at, 'localtime') >= :since GROUP BY lead_origin, d`, { since: days[0] });
+  const sources = perf.byPlatform.map((g) => {
+    const spark = days.map((d) => recent.filter((r) => r.d === d && platformOf(r.lead_origin) === g.key).reduce((t, r) => t + r.n, 0));
+    return { g: PLATFORM_KEY[g.key] || 'manual', label: g.key, total: g.leads, ready: g.ready, contacted: g.emailed, replied: g.replied, replyRate: g.replyRate, spark };
+  });
   const ramp = [];
   for (let i = 0; i < 70; i++) {
     const d = new Date(Date.now() + i * 86400_000);

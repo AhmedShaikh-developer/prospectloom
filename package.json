@@ -9,7 +9,8 @@
     "dev": "node --disable-warning=ExperimentalWarning --watch src/server.js",
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "node --disable-warning=ExperimentalWarning --test 'tests/unit/*.test.js'",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "demo": "node --disable-warning=ExperimentalWarning scripts/demo-data.js && DB_PATH=data/demo/pipeline.db PORT=4320 AUTH_ENABLED=0 SCHEDULER=off ENV_FILE=/nonexistent node --disable-warning=ExperimentalWarning src/server.js"
   },
   "engines": {
     "node": ">=22.13"

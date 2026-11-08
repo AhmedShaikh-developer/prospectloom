@@ -1,10 +1,55 @@
 # ProspectLoom
 
-Find leads around the clock, research every company from its own website, and send a few personal, human-sounding emails each day from your own mailbox. It runs locally as a dashboard and uses only free tools: OpenStreetMap for leads, Groq for writing, and any SMTP/IMAP mailbox (Hostinger is preset).
+<p align="center"><img src="public/logo.svg" width="72" alt="ProspectLoom logo"></p>
 
-find leads → research their website → one plain, personal email per lead → send a few a day at random, human-like times with a warm-up → handle replies.
+**Personal outreach on autopilot.** ProspectLoom finds leads around the clock and researches every company from its own website. It then sends a few plain, human-sounding emails each day from your own mailbox, and shows which lead sources actually bring replies.
 
-B2B and B2C both work. HubSpot, Apollo and Clay are optional.
+find leads → research their website → one personal email per lead → send at random, human-like times with a warm-up → track replies per source
+
+![Dashboard (dark theme)](docs/screenshots/dashboard-dark.png)
+
+<sub>Screenshots use the built-in demo workspace (`npm run demo`). Every company in them is fictional.</sub>
+
+## What you get
+
+- **Leads 24/7, from many sources:**
+  - a built-in OpenStreetMap lead engine (business type × city);
+  - Apollo, HubSpot and Clay, plus any CSV dropped into a watched folder;
+  - Hunter.io, which fills in missing emails.
+  - Paid sources pause when their credits run out and continue when they renew.
+- **Research on every company:** its own website is read for what the company does, a published email and one real fact for the opener. Dead or bot-protected sites are recognised, and nothing is guessed.
+- **Emails that read like a person wrote them:**
+  - one per lead, written with Groq (free) from verified facts;
+  - a quality check rejects flattery, sales jargon, copied pitch lines and invented numbers;
+  - preview each email exactly as it arrives, edit it or rewrite it.
+- **Careful sending:**
+  - random send times across a 6-hour window, different every day;
+  - an automatic warm-up (10/day for 14 days, then up to 40);
+  - a bounce guard, and opt-outs that are always honoured.
+- **Source performance:** every lead remembers where it came from, and the Performance page compares reply, interest and bounce rates per platform. You can see which source deserves more effort.
+- **Accounts:** sign-in with two-factor authentication. Every account gets its own private workspace. Dark and light themes are included.
+
+| | |
+|---|---|
+| ![Which sources bring replies](docs/screenshots/performance.png) | ![Pipeline mix, outreach activity and lead sources](docs/screenshots/dashboard-insights.png) |
+| **Performance:** reply, interest and bounce rates per source, with a verdict once each source has enough emails sent | **Dashboard:** pipeline mix, daily outreach activity, lead sources with trends, deliverability and the warm-up ramp |
+| ![Email preview](docs/screenshots/email-preview.png) | ![Integrations](docs/screenshots/integrations.png) |
+| **Every email, exactly as it arrives:** subject, body and signature footer, with pre-send checks | **Integrations:** fill in a key, Save & test. Credit-aware sources show what's left and when they continue |
+| ![Lead engine](docs/screenshots/lead-engine.png) | ![Sign in with 2FA](docs/screenshots/sign-in.png) |
+| **Lead engine:** business types × cities, searched around the clock; sources take turns | **Sign-in:** private workspaces with two-factor authentication |
+
+<details><summary>Light theme</summary>
+
+![Dashboard (light theme)](docs/screenshots/dashboard-light.png)
+
+</details>
+
+## Try it with demo data
+
+```bash
+npm install
+npm run demo        # builds a fictional demo workspace and opens it on http://127.0.0.1:4320
+```
 
 ## Run it
 
