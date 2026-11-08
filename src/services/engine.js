@@ -52,10 +52,34 @@ export function importedToday() {
   return q.get("SELECT COUNT(*) AS n FROM companies WHERE lead_origin IN ('openstreetmap','apollo') AND date(created_at, 'localtime') = date('now', 'localtime')").n;
 }
 
-/** Next due target: never-run first, then oldest whose re-scan date has passed. */
+/**
+ * Next due target. Sources take turns (OpenStreetMap → Apollo → OpenStreetMap …) so a big map sweep never
+ * starves another source; within a source: never-run first, then the oldest whose re-scan date has passed.
+ */
 export function nextTarget() {
-  return q.get(`SELECT * FROM engine_targets WHERE (next_run_at IS NULL OR next_run_at <= :now)
-    ORDER BY (last_run_at IS NULL) DESC, last_run_at ASC, id ASC LIMIT 1`, { now: nowIso() });
+  const now = nowIso();
+  const sources = q.all('SELECT DISTINCT source FROM engine_targets ORDER BY source').map((r) => r.source);
+  if (!sources.length) return null;
+  const start = (sources.indexOf(getSetting('engine_last_source')) + 1) % sources.length;
+  for (let k = 0; k < sources.length; k++) {
+    const t = q.get(`SELECT * FROM engine_targets WHERE source = :s AND (next_run_at IS NULL OR next_run_at <= :now)
+      ORDER BY (last_run_at IS NULL) DESC, last_run_at ASC, id ASC LIMIT 1`, { s: sources[(start + k) % sources.length], now });
+    if (t) return t;
+  }
+  return null;
+}
+
+/** Why the engine is not searching right now (null = it is working normally). */
+export function pauseReason() {
+  const c = config();
+  if (!c.enabled) return null;
+  const today = importedToday();
+  if (today >= c.dailyCap) {
+    const midnight = new Date(); midnight.setHours(24, 0, 0, 0);
+    return { code: 'cap', resumesAt: midnight.toISOString(), text: `Daily limit reached: ${today.toLocaleString()} new leads were added today (limit ${c.dailyCap.toLocaleString()}). Searching continues automatically after midnight.` };
+  }
+  if (!nextTarget()) return { code: 'done', text: `Every search is done. Each city is searched again ${c.rescanDays} days after its last search.` };
+  return null;
 }
 
 function plusHours(h) { return new Date(Date.now() + h * 3600_000).toISOString(); }
@@ -86,6 +110,7 @@ async function runApollo(t, ctx) {
 /** Run one target now (as a tracked job). */
 export function runTarget(t) {
   setSetting('engine_last_run', nowIso());
+  setSetting('engine_last_source', t.source);
   const { id, promise } = runJob('engine', 'Lead engine search', { targetId: t.id }, async (ctx) => {
     const now = nowIso();
     try {
@@ -142,6 +167,9 @@ export function status() {
     etaHours: remaining > 0 ? Math.ceil(remaining / c.perHour) : 0, leads,
     recent: q.all('SELECT * FROM engine_targets WHERE last_run_at IS NOT NULL ORDER BY last_run_at DESC LIMIT 25'),
     running: runningJob('engine'),
+    paused: pauseReason(),
+    nextSearchAt: c.enabled && getSetting('engine_last_run') ? new Date(new Date(getSetting('engine_last_run')).getTime() + (60 / c.perHour) * 60_000).toISOString() : null,
+    bySource: q.all("SELECT source, COUNT(*) AS targets, SUM(last_run_at IS NOT NULL) AS searched, COALESCE(SUM(imported), 0) AS imported, SUM(status = 'waiting') AS waiting FROM engine_targets GROUP BY source"),
   };
 }
 

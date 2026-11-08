@@ -1,12 +1,28 @@
 // ProspectLoom — single-page dashboard (no build step).
-import { chart, hydrateCharts, countUp, revealCards } from './charts.js';
+import { chart, hydrateCharts, countUp, revealCards, setQuiet } from './charts.js';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const app = $('#app');
 let META = null;
 
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const fmtDate = (s) => (s ? String(s).replace('T', ' ').slice(0, 16) : '—');
+// Times are stored in UTC; show them in your local time (date-only values stay as they are).
+const fmtDate = (s) => {
+  if (!s) return '—';
+  const str = String(s);
+  if (!/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(str)) return str.slice(0, 16);
+  const d = new Date(/[zZ]$|[+-]\d{2}:?\d{2}$/.test(str) ? str : `${str.replace(' ', 'T')}Z`);
+  if (Number.isNaN(d.getTime())) return str.replace('T', ' ').slice(0, 16);
+  const p2 = (x) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+};
+/** "just now", "5 min ago", "3 h ago" */
+const since = (iso) => {
+  if (!iso) return '—';
+  const t = new Date(/[zZ]$|[+-]\d{2}:?\d{2}$/.test(String(iso)) ? iso : `${String(iso).replace(' ', 'T')}Z`).getTime();
+  const m = Math.round((Date.now() - t) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+};
 const day = (s) => (s ? String(s).slice(0, 10) : '—');
 const badge = (v, label) => `<span class="badge b-${esc(v)}" data-testid="badge">${esc(label ?? META?.statuses?.[v] ?? v ?? '—')}</span>`;
 const link = (url, text) => (url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text || url)}</a>` : '<span class="muted">—</span>');
@@ -134,17 +150,35 @@ function route() {
   routeChain = routeChain.then(renderRoute, renderRoute);
   return routeChain;
 }
+// Live pages re-load their numbers every minute (quietly: no animations, scroll position kept).
+const LIVE_PAGES = new Set(['dashboard', 'engine', 'research']);
+let quietRender = false; let lastRender = Date.now();
+setInterval(() => {
+  const name = (location.hash.replace(/^#\/?/, '') || 'dashboard').split(/[/?]/)[0];
+  const busyTyping = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
+  if (!LIVE_PAGES.has(name) || document.hidden || busyTyping || !$('#modal').hidden || (name === 'engine' && engineDirty)) return;
+  quietRender = true;
+  route().finally(() => { quietRender = false; });
+}, 60_000);
+setInterval(() => { const el = $('#live-pill'); if (el) el.textContent = `Live · updated ${since(new Date(lastRender).toISOString())}`; }, 15_000);
+
 async function renderRoute() {
+  const quiet = quietRender; const scrollY = window.scrollY;
   const hash = location.hash.replace(/^#\/?/, '') || 'dashboard';
   const [pathPart, query = ''] = hash.split('?');
   const [name, id] = pathPart.split('/');
   const params = Object.fromEntries(new URLSearchParams(query));
   $$('nav a').forEach((a) => a.classList.toggle('active', a.dataset.nav === (name === 'company' ? 'companies' : name)));
   const fn = routes[name] || renderDashboard;
-  app.innerHTML = '<div class="muted">Loading…</div>';
+  if (!quiet) app.innerHTML = '<div class="muted">Loading…</div>';
   try {
     await fn({ id, params });
-    hydrateCharts(app); countUp(app); revealCards(app);
+    setQuiet(quiet);
+    hydrateCharts(app);
+    if (!quiet) { countUp(app); revealCards(app); } else window.scrollTo(0, scrollY);
+    setQuiet(false);
+    lastRender = Date.now();
+    const lp = $('#live-pill'); if (lp) { lp.textContent = 'Live · updated just now'; lp.hidden = !LIVE_PAGES.has(name); }
   } catch (e) {
     app.innerHTML = `<div class="card"><h2>Something went wrong</h2><p class="muted">${esc(e.message)}</p></div>`;
   }
@@ -401,10 +435,12 @@ async function renderEngine() {
     ${head('Lead engine', 'Finds new leads 24/7: it works through every business type × city you choose, adds businesses that have their own website, and research checks each one for a published email. No manual searching.',
     `<button id="eng-run" data-testid="engine-run-now">${ic('play')}Run one search now</button><button id="eng-toggle" class="${e.enabled ? '' : 'primary'}" data-testid="engine-toggle">${e.enabled ? 'Pause engine' : `${ic('bolt')}Start engine`}</button>`)}
     <div class="card autopilot ${e.enabled ? 'on' : ''}" data-testid="engine-status">
-      <div class="card-head"><h2>${ic('bolt')}Status ${e.enabled ? badge('ok', 'Running 24/7') : badge('warn', 'Paused')}</h2><span class="hint">${e.lastRun ? `last search ${fmtDate(e.lastRun)}` : 'no searches yet'}</span></div>
+      <div class="card-head"><h2>${ic('bolt')}Status ${e.enabled ? badge('ok', 'Running 24/7') : badge('warn', 'Paused')}</h2><span class="hint">${e.lastRun ? `last search ${since(e.lastRun)} (${fmtDate(e.lastRun)})` : 'no searches yet'}</span></div>
+      ${e.paused ? `<div class="int-msg warn" style="margin:0 0 14px" data-testid="engine-paused">${ic('clock')} ${esc(e.paused.text)}${e.paused.code === 'cap' ? ' You can raise the limit under “Pace” below.' : ''}</div>` : ''}
       ${e.running ? `<div class="working" style="margin:0 0 14px"><span class="spin"></span><div><strong>${esc(e.running.message || e.running.label)}</strong><div class="small-t muted">started ${ago(e.running.started_at)} ago</div></div></div>` : ''}
       <div class="ap-steps">
-        <div class="ap-step"><div class="grow"><div class="ap-t">${ic('search')}Searches done</div><div class="ap-v" data-testid="engine-searched">${n(e.searched)} / ${n(e.targets)}</div><div class="bar"><span style="width:${pct}%"></span></div><div class="hint">${e.errors ? `${e.errors} will retry · ` : ''}${e.etaHours ? `≈ ${e.etaHours} h to finish this sweep` : e.targets ? 'sweep complete — re-checking on schedule' : 'set up below'}</div></div></div>
+        <div class="ap-step"><div class="grow"><div class="ap-t">${ic('search')}Searches done</div><div class="ap-v" data-testid="engine-searched">${n(e.searched)} / ${n(e.targets)}</div><div class="bar"><span style="width:${pct}%"></span></div><div class="hint">${e.errors ? `${e.errors} will retry · ` : ''}${e.etaHours ? `≈ ${e.etaHours} h to finish this sweep` : e.targets ? 'sweep complete — re-checking on schedule' : 'set up below'}</div>
+          ${(e.bySource || []).length > 1 ? `<div class="hint" data-testid="engine-by-source">${e.bySource.map((x) => `${x.source === 'osm' ? 'Map listings' : x.source === 'apollo' ? 'Apollo' : esc(x.source)} ${n(x.searched)}/${n(x.targets)}${x.waiting ? ' (waiting for credits)' : ''}`).join(' · ')} — sources take turns</div>` : ''}</div></div>
         <div class="ap-step"><div class="grow"><div class="ap-t">${ic('pin')}Businesses found</div><div class="ap-v">${n(e.found)}</div><div class="hint">with their own website</div></div></div>
         <div class="ap-step"><div class="grow"><div class="ap-t">${ic('plus')}New leads added</div><div class="ap-v" data-testid="engine-imported">${n(e.imported)}</div><div class="hint">${n(e.importedToday)} today · cap ${n(e.dailyCap)}/day</div></div></div>
         <div class="ap-step"><div class="grow"><div class="ap-t">${ic('building')}Your whole list</div><div class="ap-v">${n(e.leads.total)}</div><div class="hint">${n(e.leads.withEmail || 0)} with email · ${n(e.leads.ready || 0)} ready · ${n(e.leads.contacted || 0)} contacted</div></div></div>

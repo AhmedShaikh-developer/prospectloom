@@ -5,7 +5,10 @@
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = (v) => Number(v || 0).toLocaleString();
-const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+let quiet = false;
+/** Quiet re-draws (the every-minute refresh) skip the entrance animations. */
+export const setQuiet = (v) => { quiet = !!v; };
+const reduced = () => quiet || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 export const shortDate = (k) => new Date(`${k}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' });
 
 function niceMax(m) {

@@ -73,6 +73,17 @@ test.describe.serial('Lead engine, leads folder & contact history', () => {
     expect(again.imported).toBe(0);
   });
 
+  test('lead engine: when the daily limit is reached the page says so (and when it resumes)', async ({ page, request }) => {
+    await api(request, 'PUT', '/engine', { engine_enabled: '1', engine_daily_cap: '1' });
+    expect((await api(request, 'GET', '/engine')).paused.code).toBe('cap');
+    await page.goto('/#/engine');
+    await expect(page.getByTestId('engine-paused')).toContainText('Daily limit reached');
+    await expect(page.getByTestId('engine-paused')).toContainText('continues automatically after midnight');
+    await api(request, 'PUT', '/engine', { engine_daily_cap: '1500' });
+    expect((await api(request, 'GET', '/engine')).paused?.code).not.toBe('cap'); // ("done" here: the only city was already searched)
+    await api(request, 'PUT', '/engine', { engine_enabled: '0' });
+  });
+
   test('leads folder: rich CSV columns are mapped; invalid emails dropped; generic inbox used when no decision-maker email', async ({ page, request }) => {
     await page.goto('/#/import?tab=folder');
     await expect(page.getByTestId('folder-row')).toHaveCount(1);

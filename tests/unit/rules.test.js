@@ -304,3 +304,27 @@ test('greeting by name only when the name fits the email address', () => {
   assert.equal(ob.nameFitsEmail('Chelsea Douglass', 'mike.reynolds@innovatemap.com'), false);
   assert.equal(ob.nameFitsEmail('Chelsea Douglass', 'hello@innovatemap.com'), false);
 });
+
+test('lead engine: sources take turns (map listings ↔ Apollo); the daily limit pauses it with a plain reason', async () => {
+  const { q } = await import('../../src/db/index.js');
+  const eng = await import('../../src/services/engine.js');
+  q.run('DELETE FROM engine_targets');
+  for (const [src, cat] of [['osm', 'restaurants'], ['osm', 'dentists'], ['apollo', 'shopify agency'], ['apollo', 'logistics']]) {
+    q.run("INSERT INTO engine_targets (source, category, location) VALUES (:s, :c, 'Austin, TX, USA')", { s: src, c: cat });
+  }
+  setSetting('engine_last_source', 'osm');
+  assert.equal(eng.nextTarget().source, 'apollo');
+  setSetting('engine_last_source', 'apollo');
+  assert.equal(eng.nextTarget().source, 'osm');
+  // a source with nothing due is skipped
+  q.run("UPDATE engine_targets SET next_run_at = '2999-01-01T00:00:00Z' WHERE source = 'apollo'");
+  setSetting('engine_last_source', 'osm');
+  assert.equal(eng.nextTarget().source, 'osm');
+  // nothing due anywhere → the engine says every search is done
+  q.run("UPDATE engine_targets SET next_run_at = '2999-01-01T00:00:00Z'");
+  setSetting('engine_enabled', '1');
+  assert.equal(eng.nextTarget(), null);
+  assert.equal(eng.pauseReason().code, 'done');
+  setSetting('engine_enabled', '0');
+  q.run('DELETE FROM engine_targets');
+});
