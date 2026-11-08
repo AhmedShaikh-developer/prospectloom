@@ -1,0 +1,18 @@
+# Dependencies & build/test output
+node_modules/
+tests/.tmp/
+test-results/
+playwright-report/
+*.log
+.DS_Store
+
+# Private: credentials and your data never leave this Mac
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.db-wal
+*.db-shm
+# Your real lead lists (personal data). The test fixture folder under tests/ is kept.
+/leads csv/

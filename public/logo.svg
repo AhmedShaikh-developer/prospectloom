@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="ProspectLoom">
+  <defs>
+    <linearGradient id="pl-bg" x1="6" y1="4" x2="58" y2="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffa262"/>
+      <stop offset=".45" stop-color="#ff6a1f"/>
+      <stop offset="1" stop-color="#d63f0b"/>
+    </linearGradient>
+    <linearGradient id="pl-shine" x1="32" y1="0" x2="32" y2="34" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff" stop-opacity=".28"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="17" fill="url(#pl-bg)"/>
+  <rect width="64" height="34" rx="17" fill="url(#pl-shine)"/>
+  <!-- warp threads: the leads -->
+  <g stroke="#1b0a03" stroke-width="5.5" stroke-linecap="round">
+    <path d="M15 21h17"/>
+    <path d="M15 32h11"/>
+    <path d="M15 43h21"/>
+  </g>
+  <!-- the weft thread rising through them: outreach that grows -->
+  <path d="M13 50 27 36l7 6 15-17" fill="none" stroke="#1b0a03" stroke-opacity=".28" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M13 50 27 36l7 6 15-17" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M40 23.5h9.5V33" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
