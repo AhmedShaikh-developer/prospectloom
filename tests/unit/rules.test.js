@@ -328,3 +328,25 @@ test('lead engine: sources take turns (map listings ↔ Apollo); the daily limit
   setSetting('engine_enabled', '0');
   q.run('DELETE FROM engine_targets');
 });
+
+test('day by day: emails are counted on YOUR calendar day; totals for 7 days and all time', async () => {
+  const { q } = await import('../../src/db/index.js');
+  const ins = await import('../../src/services/insights.js');
+  q.run('DELETE FROM messages'); q.run('DELETE FROM replies');
+  q.run("INSERT OR IGNORE INTO companies (id, name, domain) VALUES (9901, 'Daily Co', 'daily-co.example')");
+  const at = (msAgo) => new Date(Date.now() - msAgo).toISOString();
+  for (const [ago, st] of [[60_000, 'sent'], [120_000, 'bounced'], [86400_000 + 60_000, 'sent'], [3 * 86400_000, 'sent'], [40 * 86400_000, 'sent']]) {
+    q.run("INSERT INTO messages (company_id, kind, to_email, subject, body, status, sent_at) VALUES (9901, 'intro', 'a@daily-co.example', 's', 'b', :st, :at)", { st, at: at(ago) });
+  }
+  setSetting('report_timezone', 'Asia/Karachi');
+  const d = ins.daily({ days: 30 });
+  assert.equal(d.timezone, 'Asia/Karachi');
+  assert.equal(d.today, new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(new Date()));
+  assert.equal(d.days[0].sent, 2); assert.equal(d.days[0].bounced, 1);
+  assert.equal(d.days[1].sent, 1);
+  assert.equal(d.days[3].sent, 1);
+  assert.equal(d.last7.sent, 4);
+  assert.equal(d.allTime.sent, 5, 'all time includes the 40-day-old email');
+  setSetting('report_timezone', '');
+  q.run('DELETE FROM messages'); q.run('DELETE FROM companies WHERE id = 9901');
+});

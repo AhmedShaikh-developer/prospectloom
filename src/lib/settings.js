@@ -24,6 +24,7 @@ export const DEFAULT_SETTINGS = {
   // Autopilot: research → AI-written email → send, every day within the limits below. Off until you switch it on.
   autopilot_enabled: '0',
   send_timezone: 'America/New_York',
+  report_timezone: '',          // your own timezone for daily reports (empty = this computer's timezone)
   // Also email addresses supplied by Clay/Apollo/your CSV files (domain must match; bounces are watched).
   allow_provider_emails: '0',
   // Pause automatic sending when more than 5% of the last 7 days' emails bounced (min. 20 sent).

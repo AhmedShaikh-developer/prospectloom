@@ -310,6 +310,7 @@ export function sendPlan(d = new Date()) {
   return {
     limit, sent, due, spread: sch.spread, slots, windowStart: hhmm(sch.start), windowEnd: hhmm(sch.end),
     next: slots[nextIdx] ? slots[nextIdx].at : null, behind: Math.max(0, due - sent), nowMin: now, timezone: getSetting('send_timezone'),
+    dayLabel: new Date(`${clock.key}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }),
   };
 }
 

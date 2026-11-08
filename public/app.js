@@ -219,7 +219,8 @@ function sendPlanStrip(t) {
       : !w.started ? `Warm-up starts with your first email: ${w.base}/day for ${w.hold} days, then +${w.step} every ${w.every} days up to ${w.max}/day`
         : `Warm-up day ${w.day}: ${w.limit}/day${w.nextLimit ? ` → ${w.nextLimit}/day from ${fmtDate(w.nextDate)}` : ' (maximum reached)'}`;
   return `<div class="plan-strip" data-testid="send-plan">
-    <div class="small-t"><strong>Today: ${p.limit} emails at ${p.spread ? 'random times' : 'the window start'}, ${p.windowStart}–${p.windowEnd}</strong> <span class="muted">(${esc(p.timezone)})</span> · ${p.sent} sent${p.next ? ` · next ≈ <strong>${p.next}</strong>` : ''}</div>
+    <div class="small-t"><strong>Sending day ${esc(p.dayLabel || '')} (${esc(p.timezone)}): ${p.limit} emails at ${p.spread ? 'random times' : 'the window start'}, ${p.windowStart}–${p.windowEnd}</strong> · ${p.sent} of ${p.limit} sent${p.next ? ` · next ≈ <strong>${p.next}</strong>` : ''}</div>
+    <div class="hint small-t">The daily limit follows your recipients' day; your dashboard days follow your own clock.</div>
     <div class="slot-chips">${chips}</div>
     <div class="hint" data-testid="warmup-status">${esc(warm)} · <a href="#/settings?tab=schedule">change</a></div></div>`;
 }
@@ -271,6 +272,24 @@ function autopilotCard(d, ap, ov) {
     <div id="ap-result"></div></div>`;
 }
 
+/** Today, yesterday … 7 days ago, plus 7-day / 30-day / all-time totals — in YOUR timezone. */
+function dayByDayCard(dd) {
+  const fmtDay = (k, i) => {
+    const label = new Date(`${k}T12:00:00Z`).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+    return i === 0 ? `<strong>Today</strong> <span class="muted small-t">${label}</span>` : i === 1 ? `<strong>Yesterday</strong> <span class="muted small-t">${label}</span>` : `${label} <span class="muted small-t">· ${i} days ago</span>`;
+  };
+  const max = Math.max(1, ...dd.days.slice(0, 8).map((r) => r.sent));
+  const row = (cells, cls = '', tid = 'day-row') => `<tr class="${cls}" data-testid="${tid}">${cells}</tr>`;
+  const nums = (r) => `<td class="num"><span class="mini-bar"><span style="width:${(r.sent / max) * 100}%"></span></span><strong>${n(r.sent)}</strong></td><td class="num">${n(r.replies)}</td><td class="num">${n(r.positive)}</td><td class="num">${n(r.bounced)}</td><td class="num">${n(r.leads)}</td>`;
+  return `<div class="card reveal span-12" data-testid="day-by-day"><div class="card-head"><h2>${ic('clock')}Day by day</h2><span class="hint">your time (${esc(dd.timezone)}) · days start at your midnight</span></div>
+    <div class="table-wrap" style="max-height:none"><table><thead><tr><th>Day</th><th class="num">Emails sent</th><th class="num">Replies</th><th class="num">Interested</th><th class="num">Bounced</th><th class="num">New leads</th></tr></thead><tbody>
+      ${dd.days.slice(0, 8).map((r, i) => row(`<td>${fmtDay(r.key, i)}</td>${nums(r)}`, i === 0 ? 'today-row' : '')).join('')}
+      ${row(`<td><strong>Last 7 days</strong></td>${nums(dd.last7)}`, 'total-row', 'total-row')}
+      ${row(`<td><strong>Last 30 days</strong></td>${nums(dd.last30)}`, 'total-row', 'total-row')}
+      ${row(`<td><strong>All time</strong></td>${nums(dd.allTime)}`, 'total-row', 'total-row')}
+    </tbody></table></div></div>`;
+}
+
 function insightsList(d, ov, eng) {
   const c = ov.composition; const w = ov.warmup; const out = [];
   const perDay = d.today.limit || 1;
@@ -285,7 +304,7 @@ function insightsList(d, ov, eng) {
 }
 
 async function renderDashboard() {
-  const [d, missing, ap, ov, se, eng] = await Promise.all([GET('/dashboard'), GET('/insights/missing'), GET('/autopilot/status'), GET('/insights/overview'), GET(`/insights/series?days=${dashRange}`), GET('/engine').catch(() => null)]);
+  const [d, missing, ap, ov, se, eng, dd] = await Promise.all([GET('/dashboard'), GET('/insights/missing'), GET('/autopilot/status'), GET('/insights/overview'), GET(`/insights/series?days=${dashRange}`), GET('/engine').catch(() => null), GET('/insights/daily?days=30')]);
   const inv = d.inventory; const f = d.funnel; const t = d.today; const c = ov.composition;
   const reserveBar = (r) => {
     const pct = Math.min(100, Math.round((inv.eligibleUnsent / (r.demand || 1)) * 100));
@@ -345,8 +364,8 @@ async function renderDashboard() {
       ${kpi('users', 'Total leads', inv.total, 'kpi-total', `${todayNew ? `+${n(todayNew)} today · ` : ''}${n(inv.hold)} being researched`)}
       ${kpi('check', 'Ready to email', inv.eligibleUnsent, 'kpi-eligible', `${inv.reserveDays ?? 0} days at ${inv.dailyVolume}/day`)}
       ${kpi('search', 'Research-qualified', inv.researchQualified, 'kpi-qualified', `target ${n(inv.qualifiedTarget)}`, `<div class="bar"><span style="width:${Math.min(100, (inv.researchQualified / (inv.qualifiedTarget || 1)) * 100)}%"></span></div>`)}
-      ${kpi('send', 'Emails sent', ov.totals.sent, 'kpi-sent', `<span data-testid="kpi-sent-today">${t.sent} / ${t.limit}</span> today · ${t.approved} queued`)}
-      ${kpi('inbox', 'Replies', ov.totals.replies, 'kpi-replies', `${ov.replyRate}% reply rate · ${ov.totals.positive} positive`)}
+      ${kpi('send', 'Sent today', dd.days[0].sent, 'kpi-sent', `yesterday <strong>${n(dd.days[1]?.sent)}</strong> · 7 days <strong>${n(dd.last7.sent)}</strong> · all time <strong>${n(dd.allTime.sent)}</strong>`)}
+      ${kpi('inbox', 'Replies today', dd.days[0].replies, 'kpi-replies', `7 days <strong>${n(dd.last7.replies)}</strong> · all time <strong>${n(dd.allTime.replies)}</strong> · ${ov.replyRate}% reply rate`)}
     </div>
 
     <div class="dash mt">
@@ -360,6 +379,8 @@ async function renderDashboard() {
         ${chart({ type: 'area', labels: se.days, xFormat: 'date', series: [{ label: 'New leads', values: se.leadsTotal, color: 'var(--hero-ink)' }] }, { height: 236, label: `New leads per day over the last ${dashRange} days` })}
       </div>
       ${autopilotCard(d, ap, ov)}
+
+      ${dayByDayCard(dd)}
 
       <div class="card reveal span-7" data-testid="blockers"><div class="card-head"><h2>${ic('alert')}Blockers &amp; next actions</h2><span class="hint">${d.blockers.length} open</span></div>
         ${d.blockers.length ? d.blockers.map(blockerHtml).join('') : empty('No blockers', ' — the pipeline is clear.')}</div>
@@ -954,7 +975,7 @@ async function renderOutreach() {
     ${head('Outreach', 'Drafts → you approve → sent from your Hostinger mailbox within the daily limit. Every message is re-checked right before sending.')}
     ${d.compliance.ok ? '' : `<div class="alert sev-critical" data-testid="compliance-warning">${ic('alert')}<div class="grow"><strong>Compliance settings missing:</strong> ${esc(d.compliance.missing.join(', '))}.</div><a href="#/settings">Open settings →</a></div>`}
     <div class="grid g4" style="margin-bottom:16px">
-      <div class="card kpi"><div class="label">Sent today</div><div class="value" data-testid="quota-sent">${quota.sent} / ${quota.limit}</div><div class="bar"><span style="width:${Math.min(100, (quota.sent / (quota.limit || 1)) * 100)}%"></span></div></div>
+      <div class="card kpi"><div class="label">Sent this sending day <span class="muted small-t">(${esc(quota.plan?.timezone || '')})</span></div><div class="value" data-testid="quota-sent">${quota.sent} / ${quota.limit}</div><div class="bar"><span style="width:${Math.min(100, (quota.sent / (quota.limit || 1)) * 100)}%"></span></div></div>
       <div class="card kpi"><div class="label">Remaining today</div><div class="value">${quota.remaining}</div></div>
       <div class="card kpi"><div class="label">Approved, queued</div><div class="value" data-testid="quota-approved">${quota.approved}</div><div class="hint">auto-send ${quota.autoSend ? 'on (spaced, in window)' : 'off — use “Send now”'}</div></div>
       <div class="card kpi"><div class="label">Eligible READY</div><div class="value">${d.inventory.eligibleUnsent}</div></div>
@@ -1177,6 +1198,7 @@ async function renderSettings({ params = {} } = {}) {
       ${f('autopilot_review', 'Let me approve each email before it goes out (autopilot still finds, researches and writes)', { type: 'checkbox' })}
       <div class="grid g2">${f('pipeline_mode', 'Research rules', { type: 'select', options: { simple: 'Simple — automatic; decision-maker optional (recommended)', strict: 'Strict — every fact verified by hand, incl. decision-maker' } })}
       ${f('send_timezone', 'Send in this timezone (your recipients’)', { type: 'select', options: Object.fromEntries(TIMEZONES) })}</div>
+      ${f('report_timezone', 'Your timezone — dashboard days start at your midnight (empty = this computer’s)', { type: 'select', options: Object.fromEntries(TIMEZONES) })}
       ${f('allow_provider_emails', 'Also email addresses that come from Clay, Apollo or your CSV files (the email must be on the company’s own domain; mailboxes are not validated, so bounces are watched)', { type: 'checkbox' })}
       ${f('bounce_guard_enabled', 'Pause automatic sending if more than 5% of the last 7 days’ emails bounce (protects your domain)', { type: 'checkbox' })}
       ${f('watch_leads_folder', 'Import new CSV files from the “leads csv” folder automatically', { type: 'checkbox' })}</div>

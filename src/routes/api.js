@@ -68,6 +68,7 @@ api.get('/dashboard', h(() => ({
 api.get('/insights/missing', h(() => inv.topMissing(companies.evaluateCompany)));
 api.get('/insights/series', h((req) => insights.series(req.query.days)));
 api.get('/insights/overview', h(() => insights.overview()));
+api.get('/insights/daily', h((req) => insights.daily({ days: Math.min(90, Number(req.query.days) || 30) })));
 api.get('/performance', h(() => performance.report()));
 api.put('/performance/platform', h((req) => ({ labels: performance.setPlatform(String(req.body?.origin || ''), req.body?.platform) })));
 

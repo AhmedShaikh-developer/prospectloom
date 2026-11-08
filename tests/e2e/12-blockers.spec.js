@@ -36,4 +36,19 @@ test.describe('Phase 12 — Continuous improvement & blockers', () => {
     await expect(card.locator('tr', { hasText: 'Hostinger SMTP' })).toContainText('test capture mode');
     await expect(card.locator('tr', { hasText: 'Hostinger IMAP' })).toContainText('Not set up');
   });
+
+  test('day by day: today, yesterday … 7 days ago and totals, in your own timezone', async ({ page, request }) => {
+    const dd = await api(request, 'GET', '/insights/daily?days=30');
+    await page.goto('/#/dashboard');
+    const card = page.getByTestId('day-by-day');
+    await expect(card.getByTestId('day-row')).toHaveCount(8);
+    await expect(card.getByTestId('day-row').first()).toContainText('Today');
+    await expect(card.getByTestId('day-row').nth(1)).toContainText('Yesterday');
+    await expect(card.getByTestId('total-row')).toHaveCount(3);
+    await expect(card.getByTestId('total-row').last()).toContainText('All time');
+    await expect(page.getByTestId('kpi-sent')).toHaveText(String(dd.days[0].sent));
+    expect(dd.allTime.sent).toBeGreaterThanOrEqual(dd.last7.sent);
+    await page.goto('/#/settings?tab=schedule');
+    await expect(page.getByTestId('f-report_timezone')).toBeVisible();
+  });
 });

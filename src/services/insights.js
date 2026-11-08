@@ -1,5 +1,6 @@
 // Time series and summaries for the dashboard charts. Read-only.
 import { q } from '../db/index.js';
+import { getSetting } from '../lib/settings.js';
 import { warmupPlan, bounceGuard, sendPlan } from './outreach.js';
 import { listSources } from './sources.js';
 import { report, platformOf } from './performance.js';
@@ -93,4 +94,40 @@ export function overview() {
     // Only replies to emails this app sent count toward the rate.
     replyRate: totals.sent ? Math.round((totals.repliesToSent / totals.sent) * 1000) / 10 : 0,
   };
+}
+
+// ---------------------------------------------------------------- day by day, in YOUR timezone
+// Reports follow your own calendar (report_timezone, default: this computer's timezone), so "today"
+// resets at your midnight. The sending limit keeps using the recipients' day (send_timezone).
+export const reportTimezone = () => getSetting('report_timezone') || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+const parseTs = (t) => new Date(/[zZ]$|[+-]\d{2}:?\d{2}$/.test(String(t)) ? t : `${String(t).replace(' ', 'T')}Z`);
+function dayKey(d, tz) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+export function daily({ days = 30 } = {}) {
+  const tz = reportTimezone();
+  const DAY = 86400_000;
+  const keys = [];
+  for (let i = 0; keys.length < days && i < days + 3; i++) { const k = dayKey(new Date(Date.now() - i * DAY), tz); if (!keys.includes(k)) keys.push(k); }
+  const since = new Date(Date.now() - (days + 2) * DAY).toISOString();
+  const rows = Object.fromEntries(keys.map((k) => [k, { key: k, sent: 0, replies: 0, positive: 0, bounced: 0, leads: 0 }]));
+  const add = (t, field) => { const r = rows[dayKey(parseTs(t), tz)]; if (r) r[field]++; };
+  for (const m of q.all("SELECT sent_at AS t, status FROM messages WHERE status IN ('sent','bounced') AND sent_at >= :since", { since })) {
+    add(m.t, 'sent'); if (m.status === 'bounced') add(m.t, 'bounced');
+  }
+  for (const r of q.all("SELECT received_at AS t, classification AS c FROM replies WHERE classification IN ('positive','neutral','negative') AND received_at >= :since", { since })) {
+    add(r.t, 'replies'); if (r.c === 'positive') add(r.t, 'positive');
+  }
+  for (const c of q.all('SELECT created_at AS t FROM companies WHERE created_at >= :s', { s: since.replace('T', ' ').slice(0, 19) })) add(c.t, 'leads');
+  const list = keys.map((k) => rows[k]);
+  const sum = (n) => list.slice(0, n).reduce((a, r) => ({ sent: a.sent + r.sent, replies: a.replies + r.replies, positive: a.positive + r.positive, bounced: a.bounced + r.bounced, leads: a.leads + r.leads }), { sent: 0, replies: 0, positive: 0, bounced: 0, leads: 0 });
+  const allTime = q.get(`SELECT
+      (SELECT COUNT(*) FROM messages WHERE status IN ('sent','bounced')) AS sent,
+      (SELECT COUNT(*) FROM replies WHERE classification IN ('positive','neutral','negative')) AS replies,
+      (SELECT COUNT(*) FROM replies WHERE classification = 'positive') AS positive,
+      (SELECT COUNT(*) FROM messages WHERE status = 'bounced') AS bounced,
+      (SELECT COUNT(*) FROM companies) AS leads`);
+  return { timezone: tz, today: keys[0], days: list, last7: sum(7), last30: sum(Math.min(30, list.length)), allTime };
 }

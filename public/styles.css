@@ -542,3 +542,9 @@ button.wide, .btn.wide { width: 100%; padding: 12px 16px; font-size: 14.5px; mar
 .src .src-s { flex-wrap: wrap; align-items: center; row-gap: 6px; }
 .src .src-s > span:first-child { flex: 1 1 120px; min-width: 0; }
 .src .src-s .badge { flex: none; }
+
+/* day by day */
+.mini-bar { display: inline-block; vertical-align: middle; width: 70px; height: 6px; border-radius: 99px; background: var(--grey-soft); margin-right: 10px; overflow: hidden; }
+.mini-bar > span { display: block; height: 100%; background: var(--brand); border-radius: 99px; }
+tr.today-row td { background: var(--brand-soft); }
+tr.total-row td { background: var(--panel-2); border-top: 1px solid var(--line); }

@@ -38,7 +38,7 @@ test.describe.serial('Rounds, warm-up & website health', () => {
     expect(mins).toEqual([...mins].sort((a, b) => a - b));
     await page.goto('/#/dashboard');
     await expect(page.getByTestId('plan-slot')).toHaveCount(10);
-    await expect(page.getByTestId('send-plan')).toContainText('Today: 10 emails at random times, 09:00–15:00');
+    await expect(page.getByTestId('send-plan')).toContainText('10 emails at random times, 09:00–15:00');
     await expect(page.getByTestId('send-timeline').locator('.sd')).toHaveCount(10);
     await expect(page.getByTestId('warmup-status')).toContainText(/Warm-up (day \d+|starts with your first email)/);
 
