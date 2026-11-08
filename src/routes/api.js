@@ -21,6 +21,9 @@ import * as ai from '../integrations/ai.js';
 import * as osm from '../integrations/osm.js';
 import * as jobs from '../services/jobs.js';
 import * as engine from '../services/engine.js';
+import * as sources from '../services/sources.js';
+import * as insights from '../services/insights.js';
+import * as hunter from '../integrations/hunter.js';
 import { PRESETS } from '../lib/places.js';
 import { normalizeDomain as normDomain, emailDomain as emDomain } from '../lib/normalize.js';
 import { getAllSettings, saveSettings, getSetting, getBool } from '../lib/settings.js';
@@ -62,10 +65,30 @@ api.get('/dashboard', h(() => ({
   engine: { enabled: getBool('engine_enabled') },
 })));
 api.get('/insights/missing', h(() => inv.topMissing(companies.evaluateCompany)));
+api.get('/insights/series', h((req) => insights.series(req.query.days)));
+api.get('/insights/overview', h(() => insights.overview()));
 
 // ---------- Phase 1: settings ----------
 api.get('/settings', h(() => getAllSettings()));
-api.put('/settings', h((req) => { saveSettings(req.body); logActivity(null, 'settings_saved', Object.keys(req.body)); return getAllSettings(); }));
+// When a source's key or switches change, check it again right away (forget "waiting"/"rejected").
+const SOURCE_KEYS = {
+  apollo: ['apollo_api_key', 'apollo_api_search_enabled', 'engine_apollo_enabled'],
+  hunter: ['hunter_api_key', 'source_hunter_enabled'],
+  hubspot: ['hubspot_token', 'source_hubspot_import'],
+};
+api.put('/settings', h((req) => {
+  const before = getAllSettings({ maskSecrets: false });
+  saveSettings(req.body);
+  const after = getAllSettings({ maskSecrets: false });
+  for (const [name, keys] of Object.entries(SOURCE_KEYS)) if (keys.some((k) => before[k] !== after[k])) sources.resetSource(name);
+  logActivity(null, 'settings_saved', Object.keys(req.body));
+  return getAllSettings();
+}));
+
+// ---------- Lead sources (credit-aware) ----------
+api.get('/sources', h(() => sources.listSources()));
+api.post('/sources/:name/run', h((req) => sources.runSource(req.params.name).promise));
+api.post('/sources/:name/check', h((req) => sources.checkSource(req.params.name)));
 
 // ---------- Phase 2/3/4/6: companies ----------
 api.get('/companies', h((req) => {
@@ -371,6 +394,7 @@ api.post('/integrations/:name/test', h(async (req) => {
   switch (req.params.name) {
     case 'hubspot': return hubspot.testConnection();
     case 'apollo': return apollo.testConnection();
+    case 'hunter': { const r = await hunter.testConnection(); await sources.checkSource('hunter'); return r; }
     case 'smtp': return mailer.verifyConnection();
     case 'imap': return imap.testConnection();
     case 'mailbox': return mailboxTest();
@@ -394,6 +418,7 @@ if (config.testMode) {
   api.get('/test/captured', h(() => mailer.captured));
   api.post('/test/send-tick', h(() => outreach.autoSendTick()));
   api.post('/test/engine-tick', h((req) => engine.tick({ force: !!req.body?.force })));
+  api.post('/test/sources-tick', h(() => sources.tick()));
   api.post('/test/age-message/:id', h((req) => {
     q.run("UPDATE messages SET sent_at = datetime('now', :d) WHERE id = :id", { d: `-${Number(req.body.days || 5)} days`, id: Number(req.params.id) });
     return { ok: true };

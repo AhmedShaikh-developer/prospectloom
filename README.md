@@ -37,6 +37,22 @@ Requires Node 22.13+ (uses the built-in `node:sqlite`). Data lives in `data/pipe
 - **Already contacted**: paste emails or domains you emailed with other tools. Your Hostinger Sent folder is read over IMAP. Either way, those people never get a second intro.
 - **Background jobs**: searches, imports, research and autopilot run on the server. Their progress shows in the sidebar on every page, so leaving a page never loses work.
 
+## Integrations (all optional)
+
+Open **Integrations** in the sidebar: every tool is one card. Fill in the fields, click **Save & test**, done.
+
+| Tool | What it adds | Credits |
+|---|---|---|
+| OpenStreetMap (built in) | Businesses with their own website, for every business type × city in the Lead engine | free |
+| Apollo | Companies and decision-makers by keyword × city (people search only, never reveals emails) | waits and resumes on its own |
+| Hunter.io | The published email for companies whose website shows none, with the page it came from (confirmed on their site when possible, never guessed) | free plan 25/month, waits for renewal |
+| HubSpot | Imports your CRM companies as leads; optional status sync after approval | API limits respected |
+| Clay / Zapier / Make / n8n | Rows posted to the webhook, or CSVs dropped into `leads csv` | managed by Clay |
+
+**Credit-aware autopilot.** Each paid source pulls leads while it can. When the provider answers "out of credits", "rate limited" or "not in your plan", the source pauses. It waits until the renewal date when the provider gives one, and otherwise checks again daily. Then it continues from where it stopped: Apollo keeps its page per keyword × city, HubSpot its paging cursor, and Hunter never looks up the same company twice. Waiting sources appear on the dashboard and in Integrations. Changing a key re-checks right away.
+
+**Look & feel.** The dark (matte) and light themes switch from the top bar and are remembered. Charts are plain SVG with hover tooltips. Your logo goes in Settings → Sender & compliance → Logo. It's stored with your data in `data/brand/`, never in the repository.
+
 ## How emails are written
 
 Each email is written for one company, from facts found on its own website: one specific thing they do, what you offer in one sentence, and one low-pressure question. The writer is told to sound like a person typing a quick note: 45–90 words, plain words, no flattery or sales jargon, no dashes, no copied pitch lines. Every AI draft goes through a quality check. Drafts that sound machine-written ("impressed by", "seamless", "explore how", a copied offer line, invented numbers, links…) get one rewrite with feedback, and otherwise fall back to your template. Optionally paste an email you wrote yourself in Settings → AI writing, and the AI matches its tone.

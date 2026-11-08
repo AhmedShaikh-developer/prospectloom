@@ -26,7 +26,7 @@ const api = express();
 api.use(express.json());
 api.use((req, res, next) => {
   calls.push(`${req.method} ${req.path}`);
-  if (req.path.startsWith('/__') || req.path.startsWith('/v1') || req.path.startsWith('/api/') || req.path.startsWith('/osm/')) return next();
+  if (req.path.startsWith('/__') || req.path.startsWith('/v1') || req.path.startsWith('/api/') || req.path.startsWith('/osm/') || req.path.startsWith('/hunter/')) return next();
   if (req.path.startsWith('/openai/')) return req.get('authorization') === 'Bearer groq-test' ? next() : res.status(401).json({ error: { message: 'Invalid API Key' } });
   if (req.get('authorization') !== `Bearer ${TOKEN}`) return res.status(401).json({ message: 'Invalid token' });
   next();
@@ -110,11 +110,34 @@ api.get('/crm/v3/properties/companies/:name', (req, res) => {
 
 // Apollo
 api.get('/v1/auth/health', (req, res) => res.json({ is_logged_in: req.get('x-api-key') === 'apollo-test' }));
+let apolloMode = 'ok';
+let hunterLeft = 25;
+api.post('/__apollo-mode', (req, res) => { apolloMode = req.body.mode || 'ok'; res.json({ apolloMode }); });
+api.post('/__hunter', (req, res) => { hunterLeft = Number(req.body.left ?? 25); res.json({ hunterLeft }); });
 api.post('/api/v1/mixed_people/api_search', (req, res) => {
+  if (apolloMode === 'credits') return res.status(422).json({ error: 'You have insufficient credits. Please upgrade your plan to get more credits.' });
+  if (apolloMode === 'rate') return res.status(429).set({ 'x-minute-requests-left': '0', 'retry-after': '60' }).json({ error: 'Too many requests' });
   res.json({ people: [
     { first_name: 'Dana', last_name_obfuscated: 'R***', title: 'Founder', organization: { name: 'Bright Pixel Studio', primary_domain: 'brightpixelstudio.com', website_url: 'https://brightpixelstudio.com' } },
     { first_name: 'Lee', last_name_obfuscated: 'K***', title: 'COO', organization: { name: 'Harbor Logistics', primary_domain: 'harborlogistics.com', website_url: 'https://harborlogistics.com' } },
   ] });
+});
+// Hunter.io
+const hunterKey = (req, res) => { if (req.query.api_key !== 'hunter-test') { res.status(401).json({ errors: [{ id: 'authentication_failed', details: 'No user found for the API key supplied' }] }); return false; } return true; };
+api.get('/hunter/v2/account', (req, res) => {
+  if (!hunterKey(req, res)) return;
+  res.json({ data: { plan_name: 'Free', reset_date: '2099-01-01', requests: { searches: { used: 25 - hunterLeft, available: 25 }, verifications: { used: 0, available: 50 } } } });
+});
+api.get('/hunter/v2/domain-search', (req, res) => {
+  if (!hunterKey(req, res)) return;
+  if (hunterLeft <= 0) return res.status(429).json({ errors: [{ id: 'too_many_requests', details: "You've exceeded your usage limit" }] });
+  hunterLeft--;
+  const d = req.query.domain;
+  const emails = d.startsWith('hunted') ? [
+    { value: `riley@${d}`, type: 'personal', confidence: 96, first_name: 'Riley', last_name: 'Stone', position: 'Founder', sources: [{ domain: 'press.example.org', uri: 'https://press.example.org/riley-stone', still_on_page: true }] },
+    { value: `guess@${d}`, type: 'personal', confidence: 40, first_name: 'Pat', last_name: 'Guess', position: 'Intern', sources: [] },
+  ] : [];
+  res.json({ data: { domain: d, emails } });
 });
 api.listen(4501, '127.0.0.1');
 

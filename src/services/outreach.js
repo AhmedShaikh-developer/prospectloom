@@ -39,16 +39,23 @@ function firstName(c) {
   return c.email_contact_type === 'decision_maker' && n && nameFitsEmail(c.dm_name, c.contact_email) ? n : 'there';
 }
 
+/**
+ * Signature + compliance footer added under every email (the body already ends with the first name):
+ *   CO-Founder, Localhost Labs
+ *   localhostlabs.tech
+ *
+ *   <postal address>
+ *   <opt-out line>
+ */
 export function footer(token) {
-  const lines = [
-    '—',
-    [getSetting('sender_name'), getSetting('sender_title')].filter(Boolean).join(', '),
-    [getSetting('sender_company'), getSetting('sender_website')].filter(Boolean).join(' · '),
-    getSetting('sender_postal_address'),
-    getSetting('unsubscribe_text'),
-  ];
-  if (config.publicBaseUrl && token) lines.push(`Unsubscribe: ${config.publicBaseUrl.replace(/\/$/, '')}/u/${token}`);
-  return lines.filter(Boolean).join('\n');
+  const site = String(getSetting('sender_website') || '').trim().replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/+$/, '');
+  const signature = [
+    [getSetting('sender_title'), getSetting('sender_company')].filter(Boolean).join(', '),
+    site,
+  ].filter(Boolean);
+  const legal = [getSetting('sender_postal_address'), getSetting('unsubscribe_text')].filter(Boolean);
+  if (config.publicBaseUrl && token) legal.push(`Unsubscribe: ${config.publicBaseUrl.replace(/\/$/, '')}/u/${token}`);
+  return [signature.join('\n'), legal.join('\n')].filter(Boolean).join('\n\n');
 }
 
 export function buildIntro(c) {
@@ -259,7 +266,7 @@ export function sendPlan(d = new Date()) {
   list.forEach((r, i) => { if (now >= r.atMin) current = i; });
   const sent = sentToday(d);
   const next = list.find((r) => r.atMin > now) || null;
-  return { limit, sent, rounds: list, current: current + 1, allowedNow: current >= 0 ? list[current].upto : 0, nextRound: next ? next.at : null, timezone: getSetting('send_timezone') };
+  return { limit, sent, rounds: list, current: current + 1, allowedNow: current >= 0 ? list[current].upto : 0, nextRound: next ? next.at : null, timezone: getSetting('send_timezone'), nowMin: now };
 }
 
 /** Gap before the k-th email of the day: random between the min and max minutes (stable per day). */

@@ -91,6 +91,10 @@ export const DEFAULT_SETTINGS = {
   }),
   hubspot_contacted_stages: 'SENT,FOLLOW_UP,REPLIED,BOUNCED,DO_NOT_CONTACT',
   apollo_api_search_enabled: '0',
+  // Automatic lead sources (credit-aware: they pause when credits run out and resume when they renew)
+  source_hunter_enabled: '0',   // find published emails for companies that have none
+  hunter_batch_per_run: '10',
+  source_hubspot_import: '0',   // import companies from your HubSpot CRM as leads
 
   // AI email writing via Groq (free tier). Used whenever a Groq API key is set.
   ai_writing: '1',
@@ -137,9 +141,9 @@ Just bumping this up in case it got buried. If the timing's off, no problem at a
 };
 
 // Integration credentials (stored locally; masked when read by the UI).
-export const SECRET_KEYS = ['hubspot_token', 'apollo_api_key', 'clay_webhook_secret', 'smtp_pass', 'imap_pass', 'groq_api_key'];
+export const SECRET_KEYS = ['hubspot_token', 'apollo_api_key', 'clay_webhook_secret', 'smtp_pass', 'imap_pass', 'groq_api_key', 'hunter_api_key'];
 export const INTEGRATION_KEYS = [
-  'hubspot_token', 'hubspot_base_url', 'apollo_api_key', 'apollo_base_url', 'clay_webhook_secret',
+  'hubspot_token', 'hubspot_base_url', 'apollo_api_key', 'apollo_base_url', 'clay_webhook_secret', 'hunter_api_key', 'hunter_base_url',
   'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'imap_host', 'imap_port', 'imap_user', 'imap_pass',
   'mail_transport', 'dns_mode', 'groq_api_key', 'groq_base_url', 'osm_nominatim_url', 'osm_overpass_url',
 ];

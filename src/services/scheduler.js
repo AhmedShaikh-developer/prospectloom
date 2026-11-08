@@ -6,6 +6,7 @@ import { autoSendTick, generateDrafts, generateFollowups, runAutopilot, zonedNow
 import { saveDailySummary } from './reports.js';
 import * as imap from '../integrations/imap.js';
 import * as engine from './engine.js';
+import * as sources from './sources.js';
 import { importFolder } from './discovery.js';
 import { trackJob } from './jobs.js';
 
@@ -27,6 +28,8 @@ export async function tick() {
   const engineOn = getBool('engine_enabled');
   // Lead engine: one search at a time, paced (see engine.tick)
   if (engineOn) guarded('engine', () => engine.tick());
+  // Paid lead sources (Apollo / Hunter / HubSpot): pull while credits last, wait and resume when they renew
+  if (autopilot || engineOn) guarded('sources', () => sources.tick());
   // Watched leads folder: new or changed CSV files are imported automatically
   if (getBool('watch_leads_folder') && minutesSince(getSetting('last_folder_check')) >= 10) {
     setSetting('last_folder_check', new Date().toISOString());

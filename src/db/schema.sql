@@ -202,3 +202,19 @@ CREATE TABLE IF NOT EXISTS engine_targets (
 CREATE TABLE IF NOT EXISTS geo_cache (location TEXT PRIMARY KEY, data TEXT NOT NULL, created_at TEXT);
 -- CSV files imported from the watched "leads csv" folder.
 CREATE TABLE IF NOT EXISTS import_files (path TEXT PRIMARY KEY, size INTEGER, mtime TEXT, imported_at TEXT, stats TEXT);
+
+-- Automatic lead sources (Apollo, Hunter, HubSpot import): credit-aware state per source.
+CREATE TABLE IF NOT EXISTS source_state (
+  source TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'idle',   -- idle | ready | running | waiting_credits | rate_limited | plan | auth | error | done
+  message TEXT,
+  resume_at TEXT,                        -- do not call the provider before this time
+  credits TEXT,                          -- JSON: { used, available, left, resetAt, plan }
+  cursor TEXT,
+  runs INTEGER DEFAULT 0,
+  found INTEGER DEFAULT 0,
+  imported INTEGER DEFAULT 0,
+  last_run_at TEXT,
+  last_ok_at TEXT,
+  updated_at TEXT
+);

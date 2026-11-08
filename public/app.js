@@ -1,4 +1,5 @@
 // ProspectLoom — single-page dashboard (no build step).
+import { chart, hydrateCharts, countUp, revealCards } from './charts.js';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const app = $('#app');
@@ -123,6 +124,7 @@ const routes = {
   suppression: renderSuppression,
   setup: renderSetup,
   settings: renderSettings,
+  integrations: renderIntegrations,
 };
 
 async function route() {
@@ -135,6 +137,7 @@ async function route() {
   app.innerHTML = '<div class="muted">Loading…</div>';
   try {
     await fn({ id, params });
+    hydrateCharts(app); countUp(app); revealCards(app);
   } catch (e) {
     app.innerHTML = `<div class="card"><h2>Something went wrong</h2><p class="muted">${esc(e.message)}</p></div>`;
   }
@@ -152,33 +155,15 @@ async function refreshNav() {
     $('#nav-hubspot').textContent = ops ? ops.message.match(/\d+/)[0] : '';
     $('nav a[data-nav="hubspot"]').hidden = !(d.integrations.hubspot.configured || ops);
     $('#nav-engine').textContent = d.engine?.enabled ? 'on' : '';
+    $('#bell-dot').hidden = !unhandled;
+    const attention = d.blockers.filter((b) => ['Apollo', 'Hunter.io', 'HubSpot'].includes(b.area) && b.severity !== 'low').length;
+    $('#nav-integrations').textContent = attention || '';
   } catch { /* ignore */ }
 }
 
 const blockerHtml = (b) => `<div class="alert blocker sev-${b.severity}">${ic('alert')}<div class="grow"><strong>${esc(b.area)}</strong> — ${esc(b.message)}</div>${b.link ? `<a href="${b.link}" class="small-t">Fix →</a>` : ''}</div>`;
 
 // ---------------------------------------------------------------- dashboard (Phase 8/11/12)
-function autopilotCard(d, ap) {
-  const inv = d.inventory; const t = d.today;
-  const step = (n, icon, title, value, hint, link) => `<a class="ap-step" href="${link}"><span class="ap-n">${n}</span><div class="grow"><div class="ap-t">${ic(icon)}${title}</div><div class="ap-v">${value}</div><div class="hint">${hint}</div></div></a>`;
-  return `<div class="card autopilot ${ap.enabled ? 'on' : ''}" data-testid="autopilot-card">
-    <div class="card-head"><h2>${ic('bolt')}Autopilot ${ap.enabled ? badge('ok', 'On') : badge('warn', 'Off')}</h2>
-      <div class="row"><button id="ap-run" data-testid="autopilot-run">${ic('play')}Prepare today's emails now</button>
-      <button id="ap-toggle" class="${ap.enabled ? '' : 'primary'}" data-testid="autopilot-toggle">${ap.enabled ? 'Turn off' : `${ic('bolt')}Turn on autopilot`}</button></div></div>
-    <p class="sub" style="margin:-4px 0 14px">${ap.enabled
-    ? (ap.review
-      ? `Every day it researches new leads and writes one email per lead${ap.ai ? ' with AI' : ' from your templates'}, then <strong>waits for your approval</strong> in Outreach. Approved emails go out in rounds between <strong>${esc(ap.window)}</strong> (${esc(ap.timezone)}).`
-      : `Every day it researches new leads, writes one email per lead${ap.ai ? ' with AI' : ' from your templates'}, and sends up to <strong>${t.limit}</strong> in rounds between <strong>${esc(ap.window)}</strong> (${esc(ap.timezone)}) — no need to press Send. Opt-outs, bounces and duplicates are always skipped.`)
-    : 'You approve each email by hand. Turn autopilot on to research, write and send every day automatically, within your daily limit.'}
-      ${ap.ai ? '' : ' <a href="#/settings?tab=ai">Add a free Groq key</a> so every email is written for that lead.'}</p>
-    <div class="ap-steps">
-      ${step(1, 'bolt', 'Find leads', n(inv.total), d.engine?.enabled ? 'companies · lead engine running 24/7' : 'companies · start the lead engine', '#/engine')}
-      ${step(2, 'search', 'Research', n(inv.hold), `being checked · ${d.researchProgress ? 'running now' : 'automatic'}`, '#/companies?status=RESEARCHING,HOLD_VERIFY')}
-      ${step(3, 'check', 'Ready to email', n(inv.eligibleUnsent), 'verified, not yet contacted', '#/companies?status=READY')}
-      ${step(4, 'send', 'Sent today', `${t.sent} / ${t.limit}`, `${t.approved} queued · ${ap.inWindow ? 'sending window open' : 'outside sending window'}`, '#/outreach')}
-    </div>${sendPlanStrip(t)}<div id="ap-result"></div></div>`;
-}
-
 /** Today's rounds and the warm-up stage, in plain words. */
 function sendPlanStrip(t) {
   const p = t.plan; const w = t.warmup;
@@ -195,63 +180,197 @@ function sendPlanStrip(t) {
     <div class="hint mt" data-testid="warmup-status">${esc(warm)} · <a href="#/settings?tab=schedule">change</a></div></div>`;
 }
 
+// ---------------------------------------------------------------- dashboard
+let dashRange = (() => { try { return Number(localStorage.getItem('pl-range')) || 14; } catch { return 14; } })();
+const SOURCE_LOOK = {
+  osm: { mono: 'OS', bg: 'linear-gradient(135deg,#7ebc6f,#3f8f3a)', unit: 'leads' },
+  csv: { mono: 'CSV', bg: 'linear-gradient(135deg,#8b8cf6,#5b5bd6)', unit: 'leads' },
+  apollo: { mono: 'A', bg: 'linear-gradient(135deg,#f7d046,#d9a400)', unit: 'leads' },
+  hubspot: { mono: 'H', bg: 'linear-gradient(135deg,#ff8f6b,#ff5c35)', unit: 'leads' },
+  hunter: { mono: 'Hu', bg: 'linear-gradient(135deg,#ff7a45,#e9461c)', unit: 'emails found' },
+  clay: { mono: 'C', bg: 'linear-gradient(135deg,#55555e,#26262b)', unit: 'leads' },
+  manual: { mono: '+', bg: 'linear-gradient(135deg,#9a968f,#6b6761)', unit: 'leads' },
+};
+const STATE_BADGE = {
+  ready: ['ok', 'Active'], done: ['ok', 'Up to date'], running: ['info', 'Running'], idle: ['ok', 'Connected'],
+  waiting_credits: ['warn', 'Waiting for credits'], rate_limited: ['warn', 'Paused · rate limit'], plan: ['bad', 'Not in your plan'], auth: ['bad', 'Key rejected'], error: ['warn', 'Retrying'],
+};
+const deltaChip = (cur, prev) => {
+  if (!prev) return cur ? '<span class="delta">new</span>' : '<span class="delta flat">—</span>';
+  const p = Math.round(((cur - prev) / prev) * 100);
+  return `<span class="delta ${p < 0 ? 'down' : p === 0 ? 'flat' : ''}">${p > 0 ? '↗' : p < 0 ? '↘' : ''} ${Math.abs(p)}%</span>`;
+};
+
+function autopilotCard(d, ap, ov) {
+  const t = d.today; const p = ov.plan;
+  const [ws, we] = (ap.window.match(/(\d+):00–(\d+):00/) || [0, 9, 16]).slice(1).map(Number);
+  const startM = ws * 60; const endM = Math.max(startM + 60, we * 60);
+  const pos = (m) => Math.max(0, Math.min(100, ((m - startM) / (endM - startM)) * 100));
+  const timeline = `<div class="timeline" data-testid="send-timeline" aria-label="Today's sending rounds">
+      <div class="track"></div><div class="done" style="width:${pos(p.nowMin)}%"></div>
+      ${p.rounds.map((r) => `<div class="rd ${t.sent >= r.upto ? 'ok' : ''}" style="left:${pos(r.atMin)}%" title="Round ${r.round} at ${r.at} — ${r.count} emails">${r.count}</div><div class="tl" style="left:${pos(r.atMin)}%">${r.at}</div>`).join('')}
+      ${p.nowMin > startM && p.nowMin < endM ? `<div class="now" style="left:${pos(p.nowMin)}%"></div>` : ''}
+      <div class="tl" style="left:100%;transform:translateX(-100%)">${String(we).padStart(2, '0')}:00</div></div>`;
+  return `<div class="card autopilot reveal span-4 ${ap.enabled ? 'on' : ''}" data-testid="autopilot-card">
+    <div class="card-head"><h2>${ic('bolt')}Autopilot ${ap.enabled ? badge('ok', 'On') : badge('warn', 'Off')}</h2>
+      <button id="ap-toggle" class="small ${ap.enabled ? '' : 'primary'}" data-testid="autopilot-toggle">${ap.enabled ? 'Turn off' : `${ic('bolt')}Turn on autopilot`}</button></div>
+    <p class="sub small-t" style="margin:-4px 0 6px">${ap.enabled
+    ? (ap.review
+      ? `Researches and writes one email per lead${ap.ai ? ' with AI' : ''}, then <strong>waits for your approval</strong>. Approved emails go out in rounds, ${esc(ap.window)} (${esc(ap.timezone)}).`
+      : `Researches, writes${ap.ai ? ' with AI' : ''} and sends up to <strong>${t.limit}</strong> a day in rounds, ${esc(ap.window)} (${esc(ap.timezone)}) — no need to press Send.`)
+    : 'You approve and send each email yourself. Turn autopilot on to research, write and send every day automatically.'}
+      ${ap.ai ? '' : ' <a href="#/settings?tab=ai">Add a free Groq key</a> so every email is written for that lead.'}</p>
+    ${timeline}
+    ${sendPlanStrip(t)}
+    <div class="row mt"><button id="ap-run" class="small" data-testid="autopilot-run">${ic('play')}Prepare today's emails now</button><a href="#/outreach" class="small-t">Review queue →</a></div>
+    <div id="ap-result"></div></div>`;
+}
+
+function insightsList(d, ov, eng) {
+  const c = ov.composition; const w = ov.warmup; const out = [];
+  const perDay = d.today.limit || 1;
+  out.push(`<strong>${n(c.ready)}</strong> companies are ready to email — about <strong>${n(Math.ceil(c.ready / perDay))} days</strong> of sending at ${perDay} a day.`);
+  if (eng?.targets) out.push(`The lead engine has run <strong>${n(eng.searched)} of ${n(eng.targets)}</strong> searches and added <strong>${n(eng.imported)}</strong> businesses${eng.enabled ? ' — it keeps going around the clock' : ' (paused)'}.`);
+  if (c.offline) out.push(`Research retired <strong>${n(c.offline)}</strong> companies whose website no longer exists, so your list stays clean.`);
+  const hunter = ov.sourceStates.find((s) => s.name === 'hunter');
+  if (c.no_email) out.push(`<strong>${n(c.no_email)}</strong> companies publish no email on their website. ${hunter?.configured && hunter.enabled ? `Hunter.io is looking them up${hunter.status === 'waiting_credits' ? ' (waiting for credits to renew)' : ''}.` : '<a href="#/integrations">Connect Hunter.io</a> to find them automatically.'}`);
+  if (w.enabled) out.push(w.started ? `Warm-up day <strong>${w.day}</strong>: ${w.limit} emails a day${w.nextLimit ? `, rising to <strong>${w.nextLimit}</strong> on ${fmtDate(w.nextDate)}` : ''}.` : `Warm-up starts with your first email at <strong>${w.base}</strong> a day, then rises by ${w.step} every ${w.every} days.`);
+  if (ov.totals.sent) out.push(`<strong>${n(ov.totals.sent)}</strong> emails sent · reply rate <strong>${ov.replyRate}%</strong> · bounce rate <strong>${ov.bounce.rate}%</strong>.`);
+  return out.slice(0, 5);
+}
+
 async function renderDashboard() {
-  const [d, missing, ap] = await Promise.all([GET('/dashboard'), GET('/insights/missing'), GET('/autopilot/status')]);
-  const inv = d.inventory;
-  const f = d.funnel;
+  const [d, missing, ap, ov, se, eng] = await Promise.all([GET('/dashboard'), GET('/insights/missing'), GET('/autopilot/status'), GET('/insights/overview'), GET(`/insights/series?days=${dashRange}`), GET('/engine').catch(() => null)]);
+  const inv = d.inventory; const f = d.funnel; const t = d.today; const c = ov.composition;
   const reserveBar = (r) => {
     const pct = Math.min(100, Math.round((inv.eligibleUnsent / (r.demand || 1)) * 100));
     return `<div class="metric-row"><span>${r.days}-day reserve (${n(r.demand)})</span><span class="${r.covered ? 'ok-i' : 'muted'}">${r.covered ? 'covered' : `short ${n(r.shortfall)}`}</span></div>
       <div class="bar ${r.covered ? 'ok' : 'warn'}" style="margin-bottom:12px"><span style="width:${pct}%"></span></div>`;
   };
+  const rangeTotal = se.leadsTotal.reduce((a, b) => a + b, 0);
+  const readyInRange = se.ready.reduce((a, b) => a + b, 0);
+  const todayNew = se.leadsTotal[se.leadsTotal.length - 1] || 0;
+  const kpi = (icon, label, value, tid, hint, extra = '') => `<div class="card kpi lift reveal">
+      <div class="label"><span class="ico-chip">${ic(icon)}</span>${label}</div>
+      <div class="value" data-testid="${tid}" data-count="${value}">${n(value)}</div><div class="hint">${hint}</div>${extra}</div>`;
+
+  // pipeline composition (fixed slot order: color follows the stage, never its size)
+  const comp = [
+    ['Ready to email', c.ready, 'var(--s2)', '#/companies?status=READY', 'READY'],
+    ['Contacted', c.contacted, 'var(--s1)', '#/companies?contacted=yes', ''],
+    ['Researching', c.researching, 'var(--s3)', '#/companies?status=RESEARCHING', ''],
+    ['No email on their site', c.no_email, 'var(--s4)', '#/companies?status=HOLD_VERIFY&hasEmail=no', ''],
+    ['Waiting on checks', c.checks, 'var(--s5)', '#/companies?status=HOLD_VERIFY&hasEmail=yes', ''],
+    ['Blocks automated visits', c.blocked, 'var(--faint)', '#/companies?site=blocked', 'tex'],
+    ['Excluded or offline', c.out, 'var(--line-strong)', '#/companies?status=EXCLUDED', 'tex'],
+  ];
+  const compTotal = comp.reduce((a, x) => a + (x[1] || 0), 0) || 1;
+  const pct = (v) => `${Math.round(((v || 0) / compTotal) * 1000) / 10}%`;
+
+  const sourcesHtml = [
+    ...ov.sources.map((s) => ({ g: s.g, label: s.label, value: s.total, sub: `${n(s.ready)} ready · ${n(s.contacted)} contacted`, spark: s.spark, state: ov.sourceStates.find((x) => x.name === s.g) })),
+    ...ov.sourceStates.filter((s) => s.configured && !ov.sources.some((x) => x.g === s.name)).map((s) => ({ g: s.name, label: s.label, value: s.name === 'hunter' ? s.found : s.imported, sub: s.message || (s.enabled ? 'connected' : 'connected · auto-pull off'), spark: null, state: s })),
+  ].map((s) => {
+    const look = SOURCE_LOOK[s.g] || SOURCE_LOOK.manual;
+    const st = s.state && s.state.configured ? (s.state.enabled ? STATE_BADGE[s.state.status] || STATE_BADGE.idle : ['', 'Auto-pull off']) : null;
+    return `<a class="src" href="${s.g === 'osm' ? '#/engine' : ['apollo', 'hunter', 'hubspot', 'clay'].includes(s.g) ? '#/integrations' : `#/companies?origin=${s.g === 'csv' ? 'csv' : s.g}`}">
+      <span class="mono-ic" style="background:${look.bg}">${look.mono}</span>
+      <div><div class="src-l">${esc(s.label)}</div><div class="src-n" data-count="${s.value || 0}">${n(s.value)}</div></div>
+      ${s.spark ? chart({ type: 'spark', values: s.spark, color: 'var(--brand)' }, { height: 34, label: `${s.label}: new leads per day` }) : ''}
+      <div class="src-s"><span>${esc(s.sub)} ${look.unit === 'emails found' ? '· emails found' : ''}</span>${st ? badge(st[0], st[1]) : ''}</div></a>`;
+  }).join('') + ov.sourceStates.filter((s) => !s.configured).map((s) => {
+    const look = SOURCE_LOOK[s.name] || SOURCE_LOOK.manual;
+    return `<a class="src ghost-src" href="#/integrations"><span class="mono-ic" style="background:${look.bg}">${look.mono}</span>
+      <div><div class="src-l">${esc(s.label)}</div><div class="src-n" style="font-size:15px">Connect →</div></div>
+      <div class="src-s"><span>${esc(s.what.split('.')[0])}</span></div></a>`;
+  }).join('');
+
+  const bounce = ov.bounce;
+  const bounceColor = bounce.rate >= 5 ? 'var(--st-critical)' : bounce.rate >= 2 ? 'var(--st-warning)' : 'var(--st-good)';
+  const bounceLabel = bounce.rate >= 5 ? 'Too high — sending paused' : bounce.rate >= 2 ? 'Watch closely' : 'Healthy';
+  const rampIdx = ov.ramp.findIndex((r, i) => i > 0 && r.limit > ov.ramp[i - 1].limit);
   const funnelRows = [['Emails sent', f.sent], ['Bounced', f.bounced], ['Replies', f.replies], ['Positive', f.positive], ['Meetings / calls', f.meetings], ['Proposals', f.proposals], ['Won', f.won]];
+  const fmax = Math.max(1, ...funnelRows.map((x) => x[1]));
+
   app.innerHTML = `
-    ${head('Pipeline dashboard', 'Find leads → research → one personal email per lead → replies.',
+    ${head('Pipeline dashboard', 'Find leads → research → one personal email per lead → replies. Everything below updates on its own.',
     `<button id="go-outreach" data-testid="go-outreach">${ic('send')}Today's outreach</button><button id="run-research" data-testid="run-research">${ic('play')}Run research batch</button><a class="btn primary" href="#/import">${ic('pin')}Find leads</a>`)}
-    ${autopilotCard(d, ap)}
 
-    <div class="grid g4 mt" data-testid="kpis">
-      <div class="card kpi"><div class="label">${ic('check')}Eligible unsent READY</div><div class="value" data-testid="kpi-eligible">${n(inv.eligibleUnsent)}</div><div class="hint">${inv.reserveDays ?? 0} days at ${inv.dailyVolume}/day</div></div>
-      <div class="card kpi"><div class="label">${ic('search')}Research-qualified</div><div class="value" data-testid="kpi-qualified">${n(inv.researchQualified)}</div>
-        <div class="bar"><span style="width:${Math.min(100, (inv.researchQualified / inv.qualifiedTarget) * 100)}%"></span></div><div class="hint">target ${n(inv.qualifiedTarget)}</div></div>
-      <div class="card kpi"><div class="label">${ic('building')}Total unique companies</div><div class="value" data-testid="kpi-total">${n(inv.total)}</div><div class="hint">${n(inv.hold)} researching / on hold</div></div>
-      <div class="card kpi"><div class="label">${ic('mail')}Sent today</div><div class="value" data-testid="kpi-sent-today">${d.today.sent} / ${d.today.limit}</div><div class="hint">${d.today.approved} approved · ${d.today.drafts} drafts · auto-send ${d.today.autoSend ? 'on' : 'off'}</div></div>
+    <div class="kpis" data-testid="kpis">
+      ${kpi('users', 'Total leads', inv.total, 'kpi-total', `${todayNew ? `+${n(todayNew)} today · ` : ''}${n(inv.hold)} being researched`)}
+      ${kpi('check', 'Ready to email', inv.eligibleUnsent, 'kpi-eligible', `${inv.reserveDays ?? 0} days at ${inv.dailyVolume}/day`)}
+      ${kpi('search', 'Research-qualified', inv.researchQualified, 'kpi-qualified', `target ${n(inv.qualifiedTarget)}`, `<div class="bar"><span style="width:${Math.min(100, (inv.researchQualified / (inv.qualifiedTarget || 1)) * 100)}%"></span></div>`)}
+      ${kpi('send', 'Emails sent', ov.totals.sent, 'kpi-sent', `<span data-testid="kpi-sent-today">${t.sent} / ${t.limit}</span> today · ${t.approved} queued`)}
+      ${kpi('inbox', 'Replies', ov.totals.replies, 'kpi-replies', `${ov.replyRate}% reply rate · ${ov.totals.positive} positive`)}
     </div>
 
-    <div class="split mt">
-      <div class="card" data-testid="blockers"><div class="card-head"><h2>Blockers &amp; next actions</h2><span class="hint">${d.blockers.length} open</span></div>
+    <div class="dash mt">
+      <div class="card hero reveal span-8" data-testid="hero">
+        <div class="card-head" style="align-items:flex-start">
+          <div><div class="eyebrow">${ic('trend')}Leads collected · last ${dashRange} days</div>
+            <div class="row" style="align-items:flex-end;gap:12px;margin-top:12px"><span class="big-num" data-count="${rangeTotal}">${n(rangeTotal)}</span>${deltaChip(rangeTotal, se.prevTotal)}</div>
+            <div class="hint" style="margin-top:6px">${n(readyInRange)} became ready to email in this period · ${n(inv.total)} companies in total</div></div>
+          <div class="seg" id="range" role="tablist" aria-label="Time range">${[7, 14, 30, 90].map((r) => `<button type="button" data-r="${r}" class="${r === dashRange ? 'active' : ''}">${r}D</button>`).join('')}</div>
+        </div>
+        ${chart({ type: 'area', labels: se.days, xFormat: 'date', series: [{ label: 'New leads', values: se.leadsTotal, color: 'var(--hero-ink)' }] }, { height: 236, label: `New leads per day over the last ${dashRange} days` })}
+      </div>
+      ${autopilotCard(d, ap, ov)}
+
+      <div class="card reveal span-7" data-testid="blockers"><div class="card-head"><h2>${ic('alert')}Blockers &amp; next actions</h2><span class="hint">${d.blockers.length} open</span></div>
         ${d.blockers.length ? d.blockers.map(blockerHtml).join('') : empty('No blockers', ' — the pipeline is clear.')}</div>
-      <div class="card"><div class="card-head"><h2>Send reserve</h2><span class="hint">milestones</span></div>${reserveBar(inv.reserve14)}${reserveBar(inv.reserve30)}${reserveBar(inv.forecast60)}
+      <div class="card insight reveal span-5" data-testid="insights"><div class="card-head"><h2>${ic('sparkle')}Insights</h2><span class="hint">from your live data</span></div>
+        <ul>${insightsList(d, ov, eng).map((x) => `<li>${ic('arrow')}<span>${x}</span></li>`).join('')}</ul></div>
+
+      <div class="card reveal span-7" data-testid="inventory-breakdown"><div class="card-head"><h2>${ic('chart')}Pipeline mix</h2><span class="hint">${n(compTotal)} companies</span></div>
+        <div class="segbar" role="img" aria-label="Companies by stage">${comp.filter((x) => x[1]).map(([label, v, color, , k]) => `<span class="seg-i ${k === 'tex' ? 'tex' : ''}" style="flex-grow:${v};background-color:${color}" title="${esc(label)}: ${n(v)} (${pct(v)})"></span>`).join('')}</div>
+        <div class="comp-list">${comp.map(([label, v, color, href]) => `<a href="${href}"><span class="sw" style="background:${color}"></span>${esc(label === 'Ready to email' ? 'Ready' : label)}<span class="muted small-t">${pct(v)}</span><strong>${n(v)}</strong></a>`).join('')}</div></div>
+      <div class="card reveal span-5"><div class="card-head"><h2>${ic('send')}Outreach activity</h2>
+        <div class="legend"><span class="legend-i"><span class="sw" style="background:var(--s1)"></span>Sent</span><span class="legend-i"><span class="sw" style="background:var(--s2)"></span>Replies</span></div></div>
+        ${chart({ type: 'bars', labels: se.days, xFormat: 'date', series: [{ label: 'Sent', values: se.sent, color: 'var(--s1)' }, { label: 'Replies', values: se.replies, color: 'var(--s2)' }] }, { height: 210, label: 'Emails sent and replies per day' })}
+        <p class="hint small-t" style="margin:6px 0 0">${ov.totals.sent ? `${n(ov.totals.sent)} sent in total · ${ov.replyRate}% reply rate` : 'Your first emails go out in today\'s first round.'}</p></div>
+
+      <div class="card reveal span-12" data-testid="lead-sources"><div class="card-head"><h2>${ic('pin')}Lead sources</h2><a href="#/integrations" class="small-t">Manage integrations →</a></div>
+        <div class="sources">${sourcesHtml}</div></div>
+
+      <div class="card reveal span-4" data-testid="deliverability"><div class="card-head"><h2>${ic('shield')}Deliverability</h2>${badge(bounce.rate >= 5 ? 'bad' : bounce.rate >= 2 ? 'warn' : 'ok', bounceLabel)}</div>
+        ${chart({ type: 'gauge', value: Math.min(bounce.rate, 10), max: 10, color: bounceColor }, { height: 132, label: `Bounce rate ${bounce.rate}% of the last 7 days` })}
+        <div style="text-align:center;margin-top:-34px"><span class="big-num" style="font-size:30px">${bounce.rate}%</span><div class="hint small-t">bounce rate · ${n(bounce.sent)} sent in 7 days · pauses above 5%</div></div>
+        <div class="row mt" id="auth-chips" style="justify-content:center;gap:6px"></div></div>
+      <div class="card reveal span-4" data-testid="warmup-card"><div class="card-head"><h2>${ic('trend')}Warm-up ramp</h2><a href="#/settings?tab=schedule" class="small-t">Change →</a></div>
+        ${chart({ type: 'line', step: true, labels: ov.ramp.map((r) => r.date), xFormat: 'date', series: [{ label: 'Daily limit', values: ov.ramp.map((r) => r.limit), color: 'var(--brand)' }], marker: 0, markerLabel: 'today', annotations: rampIdx > 0 ? [{ i: rampIdx, v: ov.ramp[rampIdx].limit, text: `${ov.ramp[rampIdx].limit}/day` }] : [], unit: '/day' }, { height: 188, label: 'Daily sending limit over the next 10 weeks' })}
+        <p class="hint small-t" style="margin:6px 0 0">${ov.warmup.enabled ? `Grows by itself up to ${ov.warmup.max}/day. Drops back if bounces rise.` : 'Warm-up is off — the limit stays fixed.'}</p></div>
+      <div class="card reveal span-4"><h2>What's holding companies back</h2>
+        ${missing.length ? `<table class="plain"><tbody>${missing.slice(0, 7).map((m) => `<tr><td>${esc(m.item)}</td><td class="num"><strong>${n(m.count)}</strong></td></tr>`).join('')}</tbody></table>` : empty('Nothing on hold')}</div>
+
+      <div class="card reveal span-3"><h2>Sales funnel</h2>
+        ${funnelRows.map(([k, v]) => `<div class="metric-row"><span class="muted">${k}</span><strong>${n(v)}</strong></div><div class="bar"><span style="width:${(v / fmax) * 100}%"></span></div>`).join('')}
+        <div class="metric-row mt"><span class="muted">Revenue</span><strong>$${n(f.revenue)}</strong></div></div>
+      <div class="card reveal span-3"><div class="card-head"><h2>Send reserve</h2><span class="hint">milestones</span></div>${reserveBar(inv.reserve14)}${reserveBar(inv.reserve30)}${reserveBar(inv.forecast60)}
         <div class="row" style="gap:6px">${inv.milestones.map((m) => `<span class="badge ${m.reached ? 'b-ok' : ''}">${m.target}</span>`).join('')}</div></div>
-    </div>
-
-    <div class="grid g3 mt">
-      <div class="card" data-testid="inventory-breakdown"><h2>Inventory by status</h2>
-        <table class="plain"><tbody>${Object.entries(META.statuses).map(([k, label]) => `<tr><td>${badge(k, label)}</td><td class="num"><a href="#/companies?status=${k}">${n(inv.byStatus[k] || 0)}</a></td></tr>`).join('')}</tbody></table></div>
-      <div class="card"><h2>Sales funnel</h2><table class="plain"><tbody>
-        ${funnelRows.map(([k, v]) => `<tr><td class="muted">${k}</td><td class="num"><strong>${n(v)}</strong></td></tr>`).join('')}
-        <tr><td class="muted">Revenue</td><td class="num"><strong>$${n(f.revenue)}</strong></td></tr></tbody></table></div>
-      <div class="card"><h2>What's holding companies back</h2>
-        ${missing.length ? `<table class="plain"><tbody>${missing.slice(0, 8).map((m) => `<tr><td>${esc(m.item)}</td><td class="num">${n(m.count)}</td></tr>`).join('')}</tbody></table>` : empty('Nothing on hold')}</div>
-    </div>
-
-    <div class="split mt">
-      <div class="card"><h2>Last research run</h2>${d.lastRun ? `<pre data-testid="last-run">${esc(d.lastRun.report || 'running…')}</pre>` : empty('No research runs yet', ' — run your first batch.')}</div>
-      <div class="card"><div class="card-head"><h2>Integrations</h2><a href="#/setup" class="small-t">Setup guide →</a></div><table class="plain"><tbody>
+      <div class="card reveal span-6 order-last"><h2>Last research run</h2>${d.lastRun ? `<pre data-testid="last-run">${esc(d.lastRun.report || 'running…')}</pre>` : empty('No research runs yet', ' — run your first batch.')}</div>
+      <div class="card reveal span-6"><div class="card-head"><h2>Integrations</h2><a href="#/integrations" class="small-t">Manage →</a></div><table class="plain"><tbody>
         ${[['Hostinger SMTP (sending)', d.integrations.smtp.configured, d.integrations.smtp.mode === 'capture' ? 'test capture mode' : ''], ['Hostinger IMAP (replies)', d.integrations.imap.configured, d.integrations.imap.lastSync ? 'synced ' + fmtDate(d.integrations.imap.lastSync) : ''], ['Groq AI (email writing)', d.integrations.ai.configured, d.integrations.ai.model],
-          ['HubSpot', d.integrations.hubspot.configured, 'optional CRM', true], ['Apollo', d.integrations.apollo.configured, 'optional · CSV import works without it', true], ['Clay', d.integrations.clay.configured, 'optional · CSV import works without it', true]]
+          ['HubSpot', d.integrations.hubspot.configured, 'optional CRM', true], ['Apollo', d.integrations.apollo.configured, 'optional lead source', true], ['Hunter.io', ov.sourceStates.find((s) => s.name === 'hunter')?.configured, 'optional email finder', true], ['Clay', d.integrations.clay.configured, 'optional · CSV import works without it', true]]
           .map(([k, ok, note, optional]) => `<tr><td><span class="status-dot ${ok ? 'on' : ''}"></span>&nbsp; ${k}</td><td class="muted small-t">${esc(note || '')}</td><td class="num">${ok ? badge('ok', 'Connected') : optional ? badge('', 'Optional') : badge('warn', 'Not set up')}</td></tr>`).join('')}</tbody></table></div>
     </div>`;
+
+  $$('#range button').forEach((b) => { b.onclick = () => { dashRange = Number(b.dataset.r); try { localStorage.setItem('pl-range', dashRange); } catch { /* ignore */ } route(); }; });
   $('#run-research').onclick = (e) => act(e.currentTarget, () => POST('/research/run', {}), (r) => `Run #${r.runId}: screened ${r.stats.screened}, newly READY ${r.stats.newlyReady}`).then((r) => r && route());
   $('#go-outreach').onclick = () => { location.hash = '#/outreach'; };
   $('#ap-toggle').onclick = (e) => act(e.currentTarget, () => PUT('/settings', { autopilot_enabled: ap.enabled ? '0' : '1' }), ap.enabled ? 'Autopilot off' : 'Autopilot on — it runs every day while this app is open').then((r) => r && route());
   $('#ap-run').onclick = (e) => act(e.currentTarget, () => POST('/autopilot/run')).then((r) => {
     if (!r) return;
-    $('#ap-result').innerHTML = `<div class="alert mt" data-testid="autopilot-result">${ic('check')}<div class="grow"><strong>${r.approved} email${r.approved === 1 ? '' : 's'} ready to send</strong> (${r.drafted} new, ${r.aiWritten} written by AI${r.followups ? `, ${r.followups} follow-ups` : ''}${r.blocked ? `, ${r.blocked} blocked by checks` : ''}). ${r.approved ? (ap.enabled ? 'They go out automatically, spaced out, in the sending window.' : 'Send them from Outreach, or turn autopilot on.') : 'No READY leads left for today — find more leads.'}
+    const held = r.held != null;
+    $('#ap-result').innerHTML = `<div class="alert mt" data-testid="autopilot-result">${ic('check')}<div class="grow"><strong>${held ? `${r.held} email${r.held === 1 ? '' : 's'} waiting for your approval` : `${r.approved} email${r.approved === 1 ? '' : 's'} ready to send`}</strong> (${r.drafted} new, ${r.aiWritten} written by AI${r.followups ? `, ${r.followups} follow-ups` : ''}${r.blocked ? `, ${r.blocked} blocked by checks` : ''}). ${held ? 'Approve them in Outreach.' : r.approved ? (ap.enabled ? 'They go out automatically, in rounds, in the sending window.' : 'Send them from Outreach, or turn autopilot on.') : 'No READY leads left for today — find more leads.'}
       ${r.notes.length ? `<details class="small-t"><summary>Details</summary><ul>${r.notes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}</div><a href="#/outreach" class="small-t">Review →</a></div>`;
   });
+  // Domain authentication chips (DNS lookup — filled in when it answers)
+  GET('/sender/auth').then((a) => {
+    const el = $('#auth-chips'); if (!el) return;
+    const chip = (ok, label) => `<span class="signal ${ok ? 'y' : 'n'}">${ok ? '✓' : '✕'} ${label}</span>`;
+    el.innerHTML = chip(a.spf, 'SPF') + chip(a.dkim, 'DKIM') + chip(a.dmarc, 'DMARC') + chip(a.mx, 'MX');
+  }).catch(() => {});
 }
-
 
 // ---------------------------------------------------------------- lead engine (24/7)
 let engineDirty = false;
@@ -989,6 +1108,7 @@ const TIMEZONES = [['America/New_York', 'US Eastern (New York)'], ['America/Chic
   ['Europe/London', 'UK (London)'], ['Europe/Berlin', 'Central Europe (Berlin)'], ['Asia/Dubai', 'Gulf (Dubai)'], ['Asia/Karachi', 'Pakistan (Karachi)'], ['Australia/Sydney', 'Australia (Sydney)']];
 
 async function renderSettings({ params = {} } = {}) {
+  if (params.tab === 'integrations') return renderIntegrations({ params });
   const s = await GET('/settings');
   const f = (key, label, opts = {}) => input(s, key, label, opts);
   // Keep a custom port selectable so saving the form never silently changes it.
@@ -999,7 +1119,9 @@ async function renderSettings({ params = {} } = {}) {
       <div class="card"><h2>Offer B</h2>${f('offer_b_name', 'Name')}${f('offer_b_pitch', 'One-line pitch (used in emails)', { type: 'textarea' })}<div class="grid g2">${f('offer_b_min_employees', 'Min employees', { type: 'number' })}${f('offer_b_max_employees', 'Max employees', { type: 'number' })}</div>${f('offer_b_industries', 'Target agency types')}</div>
       <div class="card"><h2>Offer C <span class="muted small-t">B2C / local</span></h2>${f('offer_c_name', 'Name')}${f('offer_c_pitch', 'One-line pitch (used in emails)', { type: 'textarea' })}${f('offer_c_industries', 'Target business types')}</div></div>`,
     sender: `<div class="card"><h2>Sender identity &amp; CAN-SPAM</h2><p class="sub" style="margin:-6px 0 14px">Required before any company can become READY.</p>
-      <div class="grid g2">${f('sender_name', 'Sender name')}${f('sender_title', 'Sender title')}${f('sender_email', 'Sender email (your Hostinger mailbox)')}${f('sender_company', 'Company')}${f('sender_website', 'Website')}${f('sender_postal_address', 'Physical postal address')}</div>${f('unsubscribe_text', 'Opt-out line')}</div>`,
+      <div class="grid g2">${f('sender_name', 'Sender name')}${f('sender_title', 'Sender title')}${f('sender_email', 'Sender email (your Hostinger mailbox)')}${f('sender_company', 'Company')}${f('sender_website', 'Website')}${f('sender_postal_address', 'Physical postal address')}</div>${f('unsubscribe_text', 'Opt-out line')}</div>
+      <div class="card mt"><div class="card-head"><h2>Logo</h2><span class="hint">shown in the sidebar · stored privately with your data</span></div>
+        <div class="row"><span id="logo-prev"></span><input type="file" id="logo-file" accept="image/png,image/jpeg,image/webp,image/svg+xml" style="width:auto" data-testid="logo-file"><button type="button" class="ghost" id="logo-remove">Remove</button></div></div>`,
     schedule: `<div class="card" data-testid="autopilot-settings"><h2>${ic('bolt')}Autopilot</h2><p class="sub" style="margin:-6px 0 14px">When on, it researches new leads, writes one email per lead (with AI if a Groq key is set), approves emails that pass every check, and sends them within the limits below. The app must be running.</p>
       ${f('autopilot_enabled', 'Run the whole pipeline automatically every day', { type: 'checkbox' })}
       ${f('autopilot_review', 'Let me approve each email before it goes out (autopilot still finds, researches and writes)', { type: 'checkbox' })}
@@ -1027,28 +1149,11 @@ async function renderSettings({ params = {} } = {}) {
       ${f('writing_style_example', 'Optional: paste an email you wrote yourself — the AI copies its tone and length, never its content', { type: 'textarea', ph: 'Hi Sam,\n\nSaw the new booking page on your site...\n\nAhmed' })}
       <div class="grid g2">${f('groq_api_key', 'Groq API key (or GROQ_API_KEY in .env)', { type: 'password' })}${f('groq_model', 'Model', { type: 'select', options: { 'openai/gpt-oss-120b': 'openai/gpt-oss-120b (best writing)', 'openai/gpt-oss-20b': 'openai/gpt-oss-20b (faster, higher free limits)', 'qwen/qwen3.8-27b': 'qwen/qwen3.8-27b' } })}</div>
       <div class="row">${testBtn('ai', 'Test AI', 'test-ai')}<a href="https://console.groq.com/keys" target="_blank" rel="noopener" class="small-t">Get a free key →</a></div></div>`,
-    integrations: `<div class="grid g2">
-      <div class="card" data-testid="mailbox-card"><div class="card-head"><h2>${ic('inbox')}Hostinger mailbox</h2><span id="mailbox-status" data-testid="mailbox-status"></span></div>
-        <p class="sub" style="margin:-6px 0 14px">Sends your emails and reads replies, bounces and your Sent folder. Use the same email and password you use for Hostinger webmail.</p>
-        ${f('smtp_user', 'Mailbox email', { ph: s.sender_email || 'you@yourdomain.com' })}
-        ${f('smtp_pass', 'Mailbox password', { type: 'password', ph: 'password of this mailbox (not your hPanel login)' })}
-        <details><summary class="small-t">Server settings — already filled in for Hostinger</summary>
-          <div class="grid g2 mt">${f('smtp_host', 'Sending server (SMTP)')}${f('smtp_port', 'SMTP port', { type: 'select', options: portOpts(s.smtp_port, { 465: '465 — SSL/TLS (recommended)', 587: '587 — STARTTLS' }) })}
-          ${f('imap_host', 'Reading server (IMAP)')}${f('imap_port', 'IMAP port', { type: 'select', options: portOpts(s.imap_port, { 993: '993 — SSL/TLS' }) })}
-          ${f('imap_user', 'Separate IMAP login (normally empty)')}${f('imap_pass', 'Separate IMAP password (normally empty)', { type: 'password' })}</div></details>
-        <div class="row mt">${testBtn('mailbox', `${ic('check')}Save &amp; test connection`, 'test-mailbox')}<button type="button" id="mail-test-email" data-testid="test-email">${ic('send')}Send a test email to myself</button></div>
-        <p class="small-t mt" id="mailbox-res" data-testid="mailbox-res"></p></div>
-      <div class="card"><h2>HubSpot <span class="muted small-t">optional</span></h2>${f('hubspot_token', 'Service key or private app token', { type: 'password' })}${f('hubspot_base_url', 'API base URL')}
-        ${f('hubspot_contacted_stages', 'll_outreach_stage values that mean “already contacted”')}${f('hubspot_stage_map', 'Local status → ll_outreach_stage map (JSON)', { type: 'textarea' })}
-        ${testBtn('hubspot', 'Test HubSpot', 'test-hubspot')}
-        <hr><h2>Apollo <span class="muted small-t">optional</span></h2>${f('apollo_api_key', 'API key', { type: 'password' })}${f('apollo_api_search_enabled', 'Allow API people search (only if your plan makes it credit-free; never reveals emails)', { type: 'checkbox' })}
-        ${testBtn('apollo', 'Test Apollo')}
-        <hr><h2>Clay <span class="muted small-t">optional</span></h2><p class="small-t muted">CSV import or webhook — see <a href="#/setup">Setup guide → Clay</a>.</p></div></div>`,
   };
-  const names = { offers: 'Offers', sender: 'Sender & compliance', schedule: 'Autopilot & schedule', templates: 'Templates', ai: 'AI writing', integrations: 'Integrations' };
+  const names = { offers: 'Offers', sender: 'Sender & compliance', schedule: 'Autopilot & schedule', templates: 'Templates', ai: 'AI writing' };
   const tab = sections[params.tab] ? params.tab : 'offers';
-  app.innerHTML = `${head('Settings', 'Offers, compliance, sending schedule, templates and integrations. Credentials are stored only in your local database.')}
-    <div class="tabs" id="set-tabs">${Object.keys(sections).map((k) => `<button type="button" data-t="${k}" class="${k === tab ? 'active' : ''}" data-testid="settings-tab-${k}">${names[k]}</button>`).join('')}</div>
+  app.innerHTML = `${head('Settings', 'Offers, compliance, sending schedule, templates and AI writing. Connections live in Integrations. Everything is stored only in your local database.')}
+    <div class="tabs" id="set-tabs">${Object.keys(sections).map((k) => `<button type="button" data-t="${k}" class="${k === tab ? 'active' : ''}" data-testid="settings-tab-${k}">${names[k]}</button>`).join('')}<a href="#/integrations" data-testid="settings-tab-integrations">Integrations ↗</a></div>
     <form id="set-form">${Object.entries(sections).map(([k, html]) => `<div class="tab-pane" data-pane="${k}" ${k === tab ? '' : 'hidden'}>${html}</div>`).join('')}
     <div class="row mt" style="justify-content:flex-end"><button class="primary" data-testid="save-settings">${ic('check')}Save settings</button></div></form>`;
   $$('#set-tabs button').forEach((b) => { b.onclick = () => { $$('#set-tabs button').forEach((x) => x.classList.toggle('active', x === b)); $$('.tab-pane').forEach((p) => { p.hidden = p.dataset.pane !== b.dataset.t; }); }; });
@@ -1069,6 +1174,22 @@ async function renderSettings({ params = {} } = {}) {
   ['daily_send_limit', 'warmup_enabled', 'warmup_hold_days', 'warmup_step', 'warmup_every_days', 'warmup_max', 'send_rounds', 'min_minutes_between_sends', 'max_minutes_between_sends']
     .forEach((k) => $(`[name="${k}"]`)?.addEventListener('input', warmPreview));
   warmPreview();
+  wireIntegrations();
+  const lp = $('#logo-prev');
+  if (lp) {
+    fetch('/brand/logo', { method: 'HEAD' }).then((r) => { if (r.ok) lp.innerHTML = `<img src="/brand/logo?${Date.now()}" class="logo-img" alt="Logo">`; });
+    $('#logo-file').onchange = (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      const rd = new FileReader();
+      rd.onload = () => act(null, () => POST('/brand/logo', { dataUrl: rd.result }), 'Logo saved').then((r) => { if (r) { loadBrand(); route(); } });
+      rd.readAsDataURL(file);
+    };
+    $('#logo-remove').onclick = (e) => act(e.currentTarget, () => api('DELETE', '/brand/logo'), 'Logo removed').then((r) => { if (r) { loadBrand(); route(); } });
+  }
+}
+
+/** Test buttons save the form first; mailbox status/test email. Shared by Settings and Integrations. */
+function wireIntegrations() {
   // Test buttons save the form first, so a freshly typed password is what gets tested.
   const saveForm = () => PUT('/settings', formData($('#set-form')));
   const mailRes = (r, err) => { const el = $('#mailbox-res'); if (el) { el.textContent = r; el.className = `small-t mt ${err ? 'field-err' : ''}`; } };
@@ -1100,12 +1221,171 @@ async function renderSettings({ params = {} } = {}) {
     if (sm.error && !$('#mailbox-res').textContent) mailRes(sm.error, true);
   }
   mailboxStatus();
+
+}
+
+// ---------------------------------------------------------------- integrations hub
+const SRC_BADGE = (st, configured, enabled) => {
+  if (!configured) return badge('', 'Not connected');
+  if (!enabled) return badge('ok', 'Connected');
+  const [cls, label] = STATE_BADGE[st?.status] || STATE_BADGE.idle;
+  return `<span class="badge b-${cls} ${st?.status === 'running' ? 'live' : ''}">${esc(label)}</span>`;
+};
+
+function intCard({ id, mono, bg, title, tag = '', desc, status, body = '', actions = '', meta = '' }) {
+  return `<div class="card int-card reveal" data-testid="int-${id}">
+    <div class="int-head"><span class="mono-ic" style="background:${bg}">${mono}</span>
+      <div class="grow"><h2>${title} ${tag ? `<span class="muted small-t" style="font-weight:500">${tag}</span>` : ''}</h2><div class="int-status">${status}</div></div></div>
+    <p class="int-desc">${desc}</p>
+    ${body}${actions ? `<div class="int-actions">${actions}</div>` : ''}${meta}</div>`;
+}
+
+function sourceMeta(st, { unit = 'leads added' } = {}) {
+  if (!st) return '';
+  const cr = st.credits;
+  const bits = [];
+  if (cr && cr.available) {
+    const used = Math.min(cr.available, cr.used || 0);
+    bits.push(`<div><div class="metric-row"><span>Credits this period</span><strong>${n(cr.left ?? cr.available - used)} of ${n(cr.available)} left</strong></div>
+      <div class="bar ${cr.left <= 0 ? 'warn' : 'ok'}"><span style="width:${Math.max(2, ((cr.left ?? 0) / cr.available) * 100)}%"></span></div>${cr.resetAt ? `<span>Renews ${esc(String(cr.resetAt).slice(0, 10))}</span>` : ''}</div>`);
+  }
+  if (st.runs) bits.push(`<span><strong>${n(st.found)}</strong> found · <strong>${n(st.imported)}</strong> ${unit} · ${n(st.runs)} run${st.runs === 1 ? '' : 's'}${st.last_run_at ? ` · last ${fmtDate(st.last_run_at)}` : ''}</span>`);
+  if (st.resume_at && ['waiting_credits', 'rate_limited', 'plan', 'error'].includes(st.status)) bits.push(`<span>Next automatic check: <strong>${fmtDate(st.resume_at)}</strong> UTC</span>`);
+  const msg = st.message ? `<div class="int-msg ${['waiting_credits', 'rate_limited', 'error'].includes(st.status) ? 'warn' : ['auth', 'plan'].includes(st.status) ? 'bad' : ''}" data-testid="src-msg">${esc(st.message)}</div>` : '';
+  return `${msg}${bits.length ? `<div class="int-meta">${bits.join('')}</div>` : ''}`;
+}
+
+async function renderIntegrations() {
+  const [s, srcs, d, eng] = await Promise.all([GET('/settings'), GET('/sources'), GET('/dashboard'), GET('/engine').catch(() => null)]);
+  const f = (key, label, opts = {}) => input(s, key, label, opts);
+  const portOpts = (cur, opts) => (cur && !(String(cur) in opts) ? { ...opts, [cur]: String(cur) } : opts);
+  const testBtn = (name, label, tid) => `<button type="button" class="itest" data-name="${name}" ${tid ? `data-testid="${tid}"` : ''}>${label}</button>`;
+  const runBtn = (src, label, tid) => `<button type="button" class="src-run" data-src="${src}" data-testid="${tid}">${ic('play')}${label}</button>`;
+  const checkBtn = (src, label, tid) => `<button type="button" class="src-check ghost" data-src="${src}" data-testid="${tid}">${ic('sync')}${label}</button>`;
+  const st = (name) => srcs.find((x) => x.name === name) || {};
+  const ints = d.integrations;
+  const webhook = `${location.origin}/hooks/clay`;
+
+  const mailbox = `<div class="card int-card reveal" data-testid="mailbox-card"><div class="int-head"><span class="mono-ic" style="background:linear-gradient(135deg,#8c6cff,#5a3fd6)">${ic('mail')}</span>
+      <div class="grow"><h2>Hostinger mailbox</h2><div class="int-status"><span id="mailbox-status" data-testid="mailbox-status"></span></div></div></div>
+      <p class="int-desc">Sends your emails and reads replies, bounces and your Sent folder. Same email and password as Hostinger webmail.</p>
+      ${f('smtp_user', 'Mailbox email', { ph: s.sender_email || 'you@yourdomain.com' })}
+      ${f('smtp_pass', 'Mailbox password', { type: 'password', ph: 'password of this mailbox (not your hPanel login)' })}
+      <details><summary class="small-t">Server settings — already filled in for Hostinger</summary>
+        <div class="grid g2 mt">${f('smtp_host', 'Sending server (SMTP)')}${f('smtp_port', 'SMTP port', { type: 'select', options: portOpts(s.smtp_port, { 465: '465 — SSL/TLS (recommended)', 587: '587 — STARTTLS' }) })}
+        ${f('imap_host', 'Reading server (IMAP)')}${f('imap_port', 'IMAP port', { type: 'select', options: portOpts(s.imap_port, { 993: '993 — SSL/TLS' }) })}
+        ${f('imap_user', 'Separate IMAP login (normally empty)')}${f('imap_pass', 'Separate IMAP password (normally empty)', { type: 'password' })}</div></details>
+      <div class="int-actions mt">${testBtn('mailbox', `${ic('check')}Save &amp; test connection`, 'test-mailbox')}<button type="button" id="mail-test-email" data-testid="test-email">${ic('send')}Send a test email to myself</button></div>
+      <p class="small-t mt" id="mailbox-res" data-testid="mailbox-res"></p></div>`;
+
+  const groq = intCard({
+    id: 'groq', mono: 'AI', bg: 'linear-gradient(135deg,#ff8a4c,#e2470f)', title: 'Groq AI', tag: 'free',
+    desc: 'Writes one plain, human-sounding email per lead from facts on their website. Free tier, nothing to install.',
+    status: ints.ai.configured ? badge('ok', 'Connected') : badge('warn', 'Not set up'),
+    body: `${f('groq_api_key', 'API key (console.groq.com/keys)', { type: 'password' })}${f('groq_model', 'Model', { type: 'select', options: { 'openai/gpt-oss-120b': 'gpt-oss-120b — best writing', 'openai/gpt-oss-20b': 'gpt-oss-20b — faster, higher free limits', 'qwen/qwen3.8-27b': 'qwen3.8-27b' } })}`,
+    actions: `${testBtn('ai', `${ic('check')}Save &amp; test`, 'test-groq')}<a class="btn ghost" href="https://console.groq.com/keys" target="_blank" rel="noopener">Get a free key ↗</a><a class="btn ghost" href="#/settings?tab=ai">Writing style →</a>`,
+  });
+
+  const osm = intCard({
+    id: 'osm', mono: 'OS', bg: SOURCE_LOOK.osm.bg, title: 'OpenStreetMap', tag: 'built in · free',
+    desc: 'Searches every business type × city you choose, around the clock, and adds businesses that have their own website.',
+    status: eng?.enabled ? '<span class="badge b-ok live">Running 24/7</span>' : badge('warn', 'Paused'),
+    meta: eng ? `<div class="int-meta"><div><div class="metric-row"><span>Searches done</span><strong>${n(eng.searched)} / ${n(eng.targets)}</strong></div><div class="bar"><span style="width:${eng.targets ? (eng.searched / eng.targets) * 100 : 0}%"></span></div></div><span><strong>${n(eng.imported)}</strong> businesses added</span></div>` : '',
+    actions: `<a class="btn" href="#/engine">${ic('bolt')}Open lead engine</a>`,
+  });
+
+  const a = st('apollo');
+  const apollo = intCard({
+    id: 'apollo', mono: 'A', bg: SOURCE_LOOK.apollo.bg, title: 'Apollo', tag: 'lead source',
+    desc: 'Finds companies and decision-makers by keyword × city. Uses only the people search (no credits, no emails). When Apollo says you are out of credits or over the limit, it waits and continues from the same page automatically.',
+    status: SRC_BADGE(a, a.configured, a.enabled),
+    body: `${f('apollo_api_key', 'API key (Apollo → Settings → Integrations → API)', { type: 'password' })}
+      ${f('apollo_api_search_enabled', 'Allow API people search (never reveals emails, never spends export credits)', { type: 'checkbox' })}
+      ${f('engine_apollo_enabled', 'Pull leads automatically (keywords are set in the Lead engine)', { type: 'checkbox' })}`,
+    actions: `${testBtn('apollo', `${ic('check')}Save &amp; test`, 'test-apollo')}${checkBtn('apollo', 'Check now', 'apollo-check')}<a class="btn ghost" href="#/engine">Keywords →</a>`,
+    meta: sourceMeta(a),
+  });
+
+  const h = st('hunter');
+  const hunter = intCard({
+    id: 'hunter', mono: 'Hu', bg: SOURCE_LOOK.hunter.bg, title: 'Hunter.io', tag: 'email finder',
+    desc: 'For companies whose own website shows no email, finds the address they published elsewhere on the web — with the page it came from — and confirms it on their site when it can. Never guesses. Free plan: 25 searches a month; it pauses when they run out and resumes when they renew.',
+    status: SRC_BADGE(h, h.configured, h.enabled),
+    body: `${f('hunter_api_key', 'API key (hunter.io → API)', { type: 'password' })}
+      <div class="grid g2">${f('source_hunter_enabled', 'Find emails automatically', { type: 'checkbox' })}${f('hunter_batch_per_run', 'Companies per run (every 30 min)', { type: 'number' })}</div>`,
+    actions: `${testBtn('hunter', `${ic('check')}Save &amp; test`, 'test-hunter')}${runBtn('hunter', 'Find emails now', 'hunter-run')}${checkBtn('hunter', 'Check credits', 'hunter-check')}`,
+    meta: sourceMeta(h, { unit: 'now ready to email' }),
+  });
+
+  const hs = st('hubspot');
+  const hubspot = intCard({
+    id: 'hubspot', mono: 'H', bg: SOURCE_LOOK.hubspot.bg, title: 'HubSpot', tag: 'CRM',
+    desc: 'Imports the companies in your CRM as leads (read-only), skips anyone already contacted, and can sync statuses back after your approval.',
+    status: SRC_BADGE(hs, hs.configured, hs.enabled),
+    body: `${f('hubspot_token', 'Service key or private app token', { type: 'password' })}
+      ${f('source_hubspot_import', 'Import my HubSpot companies as leads automatically', { type: 'checkbox' })}
+      <details><summary class="small-t">Advanced</summary><div class="mt">${f('hubspot_base_url', 'API base URL')}${f('hubspot_contacted_stages', 'll_outreach_stage values that mean “already contacted”')}${f('hubspot_stage_map', 'Local status → ll_outreach_stage map (JSON)', { type: 'textarea' })}</div></details>`,
+    actions: `${testBtn('hubspot', `${ic('check')}Save &amp; test`, 'test-hubspot')}${runBtn('hubspot', 'Import now', 'hubspot-run')}<a class="btn ghost" href="#/hubspot">CRM sync →</a>`,
+    meta: sourceMeta(hs),
+  });
+
+  const clay = intCard({
+    id: 'clay', mono: 'C', bg: SOURCE_LOOK.clay.bg, title: 'Clay', tag: 'and Zapier · Make · n8n',
+    desc: 'Clay has no API to read from — it sends rows here instead. Easiest: export a CSV and drop it into the “leads csv” folder (imported within 10 minutes). Automatic: add an HTTP API column in Clay that POSTs each row to the webhook below. Clay pauses itself when its credits run out and continues when they renew.',
+    status: ints.clay.configured ? badge('ok', 'Webhook ready') : badge('', 'CSV folder only'),
+    body: `<div class="field"><label>Webhook URL (needs a public address — see Setup guide → Clay)</label><input readonly value="${esc(webhook)}" class="mono"></div>
+      <div class="field"><label>Header</label><input readonly class="mono" value="x-clay-secret: ${ints.clay.configured ? '••••••••' : '(generate a secret)'}" id="clay-secret-view"></div>`,
+    actions: `<button type="button" id="clay-gen" data-testid="clay-secret-gen">${ic('sparkle')}Generate new secret</button><a class="btn ghost" href="#/import?tab=folder">Leads folder →</a>`,
+  });
+
+  app.innerHTML = `${head('Integrations', 'Connect the tools you use: fill in the fields, click Save &amp; test, done. Paid sources pull leads while credits last, pause when they run out, and continue automatically when they renew.')}
+    <form id="set-form">
+      <div class="section-title">Sending &amp; writing</div>
+      <div class="int-grid">${mailbox}${groq}</div>
+      <div class="section-title">Lead sources</div>
+      <div class="int-grid">${osm}${apollo}${hunter}${hubspot}${clay}</div>
+      <div class="save-bar"><button class="primary" data-testid="save-settings">${ic('check')}Save settings</button></div>
+    </form>`;
+  $('#set-form').onsubmit = async (e) => {
+    e.preventDefault();
+    await act(e.submitter, () => PUT('/settings', formData(e.target)), 'Settings saved');
+  };
+  const saveForm = () => PUT('/settings', formData($('#set-form')));
+  $$('.src-run').forEach((b) => { b.onclick = (e) => act(e.currentTarget, async () => { await saveForm(); return POST(`/sources/${b.dataset.src}/run`); }, (r) => r.summary || 'Done').then((r) => { if (r) route(); }); });
+  $$('.src-check').forEach((b) => { b.onclick = (e) => act(e.currentTarget, async () => { await saveForm(); return POST(`/sources/${b.dataset.src}/check`); }, (r) => r.message || (STATE_BADGE[r.status] || [])[1] || 'Checked').then((r) => { if (r) route(); }); });
+  $('#clay-gen').onclick = (e) => act(e.currentTarget, () => POST('/integrations/clay/secret'), 'New secret generated — copy it into Clay now').then((r) => { if (r) $('#clay-secret-view').value = `x-clay-secret: ${r.secret}`; });
+  wireIntegrations();
+}
+
+// ---------------------------------------------------------------- brand & greeting
+/** Your logo and company name in the sidebar; greeting in the top bar. */
+function loadBrand() {
+  GET('/settings').then((s) => {
+    $('#brand-name').textContent = s.sender_company || 'ProspectLoom';
+    $('#brand-sub').textContent = s.sender_company ? 'ProspectLoom' : 'Leads & outreach';
+    const h = new Date().getHours();
+    const first = String(s.sender_name || '').split(' ')[0];
+    $('#greet').innerHTML = `${h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'}${first ? `, <strong>${esc(first)}</strong>` : ''} · ${new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}`;
+  }).catch(() => {});
+  fetch('/brand/logo', { method: 'HEAD' }).then((r) => {
+    const mark = $('#brand-mark');
+    if (r.ok) mark.outerHTML = `<img src="/brand/logo?${Date.now()}" class="logo-img" id="brand-mark" alt="">`;
+    else if (mark.tagName === 'IMG') mark.outerHTML = '<span class="logo" id="brand-mark">PL</span>';
+  }).catch(() => {});
 }
 
 // ---------------------------------------------------------------- boot
 (async function boot() {
   META = await GET('/meta');
-  GET('/settings').then((s) => { if (s.sender_company) $('#brand-sub').textContent = s.sender_company; }).catch(() => {});
+  loadBrand();
+  $('#theme-toggle').onclick = () => {
+    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    document.documentElement.classList.add('theme-fade');
+    document.documentElement.dataset.theme = next;
+    setTimeout(() => document.documentElement.classList.remove('theme-fade'), 400);
+    try { localStorage.setItem('pl-theme', next); } catch { /* private mode */ }
+    hydrateCharts(app);
+  };
   if (META.testMode) $('#mode-badge').innerHTML = '<span class="badge b-warn">TEST MODE — emails captured, not sent</span>';
   route();
   pollJobs();

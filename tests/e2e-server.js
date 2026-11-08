@@ -16,6 +16,7 @@ Object.assign(process.env, {
   HUBSPOT_BASE_URL: 'http://127.0.0.1:4501',
   APOLLO_BASE_URL: 'http://127.0.0.1:4501',
   GROQ_BASE_URL: 'http://127.0.0.1:4501/openai/v1',
+  HUNTER_BASE_URL: 'http://127.0.0.1:4501/hunter',
   GROQ_API_KEY: '',
   OSM_NOMINATIM_URL: 'http://127.0.0.1:4501/osm/nominatim',
   OSM_OVERPASS_URL: 'http://127.0.0.1:4501/osm/overpass',

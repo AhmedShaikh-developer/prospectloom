@@ -7,6 +7,7 @@ import * as mailer from '../integrations/mailer.js';
 import * as imap from '../integrations/imap.js';
 import * as apollo from '../integrations/apollo.js';
 import * as ai from '../integrations/ai.js';
+import { listSources } from './sources.js';
 import { quotaStatus, bounceGuard, sendPlan, warmupPlan } from './outreach.js';
 
 export const MILESTONES = [30, 100, 140, 300, 600];
@@ -98,6 +99,10 @@ export function blockers() {
   if (getBool('autopilot_review')) {
     const waiting = q.get("SELECT COUNT(*) AS n FROM messages WHERE status = 'draft'").n;
     if (waiting) out.push({ severity: 'high', area: 'Outreach', message: `${waiting} email(s) written and waiting for your approval — nothing goes out until you approve`, link: '#/outreach' });
+  }
+  for (const s of listSources().filter((x) => x.configured && x.enabled)) {
+    if (s.status === 'auth') out.push({ severity: 'high', area: s.label, message: s.message || 'API key rejected', link: '#/integrations' });
+    else if (['waiting_credits', 'plan', 'rate_limited'].includes(s.status)) out.push({ severity: 'low', area: s.label, message: s.message, link: '#/integrations' });
   }
   const pendingOps = q.get("SELECT COUNT(*) AS n FROM hubspot_ops WHERE status IN ('proposed','approved')").n;
   if (pendingOps) out.push({ severity: 'low', area: 'HubSpot', message: `${pendingOps} CRM write(s) awaiting approval — not synchronized yet`, link: '#/hubspot' });

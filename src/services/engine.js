@@ -8,6 +8,7 @@ import * as osm from '../integrations/osm.js';
 import * as apollo from '../integrations/apollo.js';
 import { importLocal, importRecords } from './discovery.js';
 import { dropDeadSites } from '../lib/dns.js';
+import { noteError as noteSourceError, noteSuccess as noteSourceSuccess } from './sources.js';
 import { runJob, runningJob } from './jobs.js';
 
 const lines = (s) => [...new Set(String(s || '').split(/\n|;/).map((x) => x.trim()).filter(Boolean))];
@@ -97,8 +98,10 @@ export function runTarget(t) {
         cursor: t.source === 'apollo' ? (r.exhausted ? 1 : t.cursor + 1) : 1,
         next: apolloNext ? now : plusHours(rescanH),
       });
+      if (t.source === 'apollo') noteSourceSuccess('apollo', r);
       return { ...r, summary: `${r.label}: ${r.found} found, ${r.imported} new${r.deadSites ? `, ${r.deadSites} skipped (website no longer exists)` : ''}` };
     } catch (e) {
+      if (t.source === 'apollo' && e.kind) { noteSourceError('apollo', e); throw e; } // out of credits / rate limit: wait, keep the cursor
       // Busy/timeout errors: retry in an hour. Bad location: retry much later.
       const permanent = /Could not find|whole/.test(e.message);
       q.run("UPDATE engine_targets SET status = 'error', error = :err, runs = runs + 1, last_run_at = :now, next_run_at = :next WHERE id = :id",
@@ -128,13 +131,13 @@ export async function tick({ force = false } = {}) {
 
 export function status() {
   const c = config();
-  const t = q.get(`SELECT COUNT(*) AS total, SUM(last_run_at IS NOT NULL) AS searched, SUM(status = 'error') AS errors,
+  const t = q.get(`SELECT COUNT(*) AS total, SUM(last_run_at IS NOT NULL) AS searched, SUM(status = 'error') AS errors, SUM(status = 'waiting') AS waiting,
     COALESCE(SUM(found), 0) AS found, COALESCE(SUM(imported), 0) AS imported FROM engine_targets`);
   const leads = q.get(`SELECT COUNT(*) AS total, SUM(contact_email IS NOT NULL) AS withEmail, SUM(status = 'READY') AS ready,
     SUM(status IN ('SENT','FOLLOW_UP','REPLIED','BOUNCED')) AS contacted FROM companies`);
   const remaining = (t.total || 0) - (t.searched || 0);
   return {
-    ...c, targets: t.total || 0, searched: t.searched || 0, errors: t.errors || 0, found: t.found, imported: t.imported,
+    ...c, targets: t.total || 0, searched: t.searched || 0, errors: t.errors || 0, waiting: t.waiting || 0, found: t.found, imported: t.imported,
     importedToday: importedToday(), lastRun: getSetting('engine_last_run') || null,
     etaHours: remaining > 0 ? Math.ceil(remaining / c.perHour) : 0, leads,
     recent: q.all('SELECT * FROM engine_targets WHERE last_run_at IS NOT NULL ORDER BY last_run_at DESC LIMIT 25'),

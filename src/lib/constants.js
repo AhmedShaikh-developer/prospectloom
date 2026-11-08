@@ -37,6 +37,7 @@ export const EVIDENCE_TYPES = {
   partnership_channel: 'Identified partnership / vendor channel',
   public_work_email: 'Publicly identified work email of decision-maker',
   apollo_database: 'Apollo database (not public-source confirmed)',
+  hunter_io: 'Hunter.io (found on the public web, not confirmed on their own site)',
   clay_enrichment: 'Clay enrichment (not public-source confirmed)',
   imported_list: 'Imported list / CSV (not public-source confirmed)',
   hubspot_existing: 'Existing HubSpot value (re-verify)',
@@ -44,7 +45,7 @@ export const EVIDENCE_TYPES = {
 };
 export const ACCEPTED_EVIDENCE = new Set(['official_website', 'partner_directory', 'partnership_channel', 'public_work_email']);
 // Emails from data providers / your own lists. Usable only when Settings → allow_provider_emails is on.
-export const PROVIDER_EVIDENCE = new Set(['apollo_database', 'clay_enrichment', 'imported_list']);
+export const PROVIDER_EVIDENCE = new Set(['apollo_database', 'clay_enrichment', 'imported_list', 'hunter_io']);
 
 export const CONTACT_TYPES = {
   general: 'General business inbox',

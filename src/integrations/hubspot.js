@@ -1,6 +1,7 @@
 // Phase 7: HubSpot CRM (private app token). Reads are free; writes go through an
 // approval queue (services/hubspotSync.js) and are confirmed by re-reading.
 import { getSetting } from '../lib/settings.js';
+import { SourceError } from '../lib/sourceError.js';
 import { HUBSPOT_PROPERTIES } from '../lib/constants.js';
 
 export function isConfigured() {
@@ -24,11 +25,13 @@ async function call(method, path, body) {
     if (!res.ok) {
       const err = new Error(`HubSpot ${method} ${path} → ${res.status}: ${data.message || text.slice(0, 200)}`);
       err.status = res.status; err.data = data;
+      if (res.status === 401) err.kind = 'auth';
+      else if (res.status === 403) err.kind = 'plan';
       throw err;
     }
     return data;
   }
-  throw new Error('HubSpot rate limit: retries exhausted');
+  throw new SourceError('HubSpot rate limit reached — pausing briefly', 'rate', { retryAfter: 60 });
 }
 
 const COMPANY_PROPS = ['name', 'domain', 'website', 'industry', 'numberofemployees', 'city', 'state', 'country', 'description', ...HUBSPOT_PROPERTIES];

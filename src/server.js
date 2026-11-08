@@ -1,6 +1,7 @@
 import { upgradeDefaultTemplates } from './lib/settings.js';
 import express from 'express';
 import path from 'node:path';
+import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { config, ROOT } from './config.js';
 import { getDb } from './db/index.js';
@@ -44,6 +45,29 @@ if (config.dashboardPassword) {
   });
 }
 
+// Your company logo lives next to your data (private, never in the code repository).
+const brandDir = path.join(path.dirname(config.dbPath), 'brand');
+const LOGO_FILES = ['logo.png', 'logo.jpg', 'logo.webp', 'logo.svg'];
+app.get('/brand/logo', (req, res) => {
+  const f = LOGO_FILES.map((x) => path.join(brandDir, x)).find((p) => fs.existsSync(p));
+  if (!f) return res.status(404).end();
+  res.set('Cache-Control', 'no-cache').sendFile(f);
+});
+app.post('/api/brand/logo', (req, res) => {
+  const m = String(req.body?.dataUrl || '').match(/^data:image\/(png|jpe?g|webp|svg\+xml);base64,(.+)$/);
+  if (!m) return res.status(400).json({ error: 'Choose a PNG, JPG, WebP or SVG image' });
+  const ext = { png: 'png', jpg: 'jpg', jpeg: 'jpg', webp: 'webp', 'svg+xml': 'svg' }[m[1]];
+  const buf = Buffer.from(m[2], 'base64');
+  if (buf.length > 3 * 1024 * 1024) return res.status(400).json({ error: 'Logo must be under 3 MB' });
+  fs.mkdirSync(brandDir, { recursive: true });
+  for (const x of LOGO_FILES) fs.rmSync(path.join(brandDir, x), { force: true });
+  fs.writeFileSync(path.join(brandDir, `logo.${ext}`), buf);
+  res.json({ ok: true });
+});
+app.delete('/api/brand/logo', (req, res) => {
+  for (const x of LOGO_FILES) fs.rmSync(path.join(brandDir, x), { force: true });
+  res.json({ ok: true });
+});
 app.use('/api', api);
 app.use(express.static(path.join(ROOT, 'public')));
 app.get('*', (req, res) => res.sendFile(path.join(ROOT, 'public', 'index.html')));

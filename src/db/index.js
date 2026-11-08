@@ -17,7 +17,7 @@ export function getDb() {
 
 // Add columns introduced after a database was first created.
 const COLUMN_MIGRATIONS = {
-  companies: { dm_verified: 'INTEGER NOT NULL DEFAULT 0', scan_facts: 'TEXT', mail_auth: 'TEXT', site_status: 'TEXT', next_screen_at: 'TEXT' },
+  companies: { dm_verified: 'INTEGER NOT NULL DEFAULT 0', scan_facts: 'TEXT', mail_auth: 'TEXT', site_status: 'TEXT', next_screen_at: 'TEXT', hunter_checked_at: 'TEXT' },
 };
 function migrate(d) {
   for (const [table, cols] of Object.entries(COLUMN_MIGRATIONS)) {

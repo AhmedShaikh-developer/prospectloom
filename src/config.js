@@ -36,6 +36,8 @@ export const config = {
     apollo_api_key: env.APOLLO_API_KEY || '',
     apollo_base_url: env.APOLLO_BASE_URL || 'https://api.apollo.io',
     clay_webhook_secret: env.CLAY_WEBHOOK_SECRET || '',
+    hunter_api_key: env.HUNTER_API_KEY || '',
+    hunter_base_url: env.HUNTER_BASE_URL || 'https://api.hunter.io',
     smtp_host: env.SMTP_HOST || 'smtp.hostinger.com',
     smtp_port: env.SMTP_PORT || '465',
     smtp_user: env.SMTP_USER || '',
