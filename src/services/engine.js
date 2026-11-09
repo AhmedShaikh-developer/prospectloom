@@ -10,6 +10,7 @@ import { importLocal, importRecords } from './discovery.js';
 import { dropDeadSites } from '../lib/dns.js';
 import { noteError as noteSourceError, noteSuccess as noteSourceSuccess } from './sources.js';
 import { runJob, runningJob } from './jobs.js';
+import { dayStartIn, nextDayStartIn, reportTimezone } from '../lib/clock.js';
 
 const lines = (s) => [...new Set(String(s || '').split(/\n|;/).map((x) => x.trim()).filter(Boolean))];
 const list = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -48,8 +49,10 @@ export function syncTargets() {
   return { targets: wanted.length, removed };
 }
 
+/** New leads the engine added today — "today" in your own timezone (Settings → Your timezone). */
 export function importedToday() {
-  return q.get("SELECT COUNT(*) AS n FROM companies WHERE lead_origin IN ('openstreetmap','apollo') AND date(created_at, 'localtime') = date('now', 'localtime')").n;
+  return q.get("SELECT COUNT(*) AS n FROM companies WHERE lead_origin IN ('openstreetmap','apollo') AND datetime(created_at) >= datetime(:start)",
+    { start: dayStartIn().toISOString() }).n;
 }
 
 /**
@@ -75,8 +78,7 @@ export function pauseReason() {
   if (!c.enabled) return null;
   const today = importedToday();
   if (today >= c.dailyCap) {
-    const midnight = new Date(); midnight.setHours(24, 0, 0, 0);
-    return { code: 'cap', resumesAt: midnight.toISOString(), text: `Daily limit reached: ${today.toLocaleString()} new leads were added today (limit ${c.dailyCap.toLocaleString()}). Searching continues automatically after midnight.` };
+    return { code: 'cap', resumesAt: nextDayStartIn().toISOString(), text: `Daily limit reached: ${today.toLocaleString('en-US')} new leads were added today (limit ${c.dailyCap.toLocaleString('en-US')}). Searching starts again by itself at midnight, your time.` };
   }
   if (!nextTarget()) return { code: 'done', text: `Every search is done. Each city is searched again ${c.rescanDays} days after its last search.` };
   return null;
@@ -163,7 +165,7 @@ export function status() {
   const remaining = (t.total || 0) - (t.searched || 0);
   return {
     ...c, targets: t.total || 0, searched: t.searched || 0, errors: t.errors || 0, waiting: t.waiting || 0, found: t.found, imported: t.imported,
-    importedToday: importedToday(), lastRun: getSetting('engine_last_run') || null,
+    importedToday: importedToday(), lastRun: getSetting('engine_last_run') || null, timezone: reportTimezone(),
     etaHours: remaining > 0 ? Math.ceil(remaining / c.perHour) : 0, leads,
     recent: q.all('SELECT * FROM engine_targets WHERE last_run_at IS NOT NULL ORDER BY last_run_at DESC LIMIT 25'),
     running: runningJob('engine'),

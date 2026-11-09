@@ -350,3 +350,32 @@ test('day by day: emails are counted on YOUR calendar day; totals for 7 days and
   setSetting('report_timezone', '');
   q.run('DELETE FROM messages'); q.run('DELETE FROM companies WHERE id = 9901');
 });
+
+test('your clock: day boundaries in any timezone', async () => {
+  const { dayStartIn, nextDayStartIn } = await import('../../src/lib/clock.js');
+  const now = new Date('2026-11-09T10:30:00Z'); // 3:30 PM in Karachi
+  assert.equal(dayStartIn(now, 'Asia/Karachi').toISOString(), '2026-11-08T19:00:00.000Z');
+  assert.equal(nextDayStartIn(now, 'Asia/Karachi').toISOString(), '2026-11-09T19:00:00.000Z');
+  assert.equal(dayStartIn(now, 'America/New_York').toISOString(), '2026-11-09T05:00:00.000Z');
+});
+
+test('automation schedule: sending hours that straddle your midnight, and when sending starts next', async () => {
+  const { automationStatus, nextWindowStart } = await import('../../src/services/automation.js');
+  setSetting('send_timezone', 'America/New_York'); setSetting('report_timezone', 'Asia/Karachi');
+  setSetting('send_window_start', '9'); setSetting('send_window_end', '15'); setSetting('send_days', '0,1,2,3,4,5,6');
+  const now = new Date('2026-11-09T10:30:00Z'); // Mon 3:30 PM in Karachi = 5:30 AM in New York
+  assert.equal(nextWindowStart(now).toISOString(), '2026-11-09T14:00:00.000Z', '9 AM New York = 7 PM Karachi');
+  assert.equal(nextWindowStart(now, { afterToday: true }).toISOString(), '2026-11-10T14:00:00.000Z');
+  const au = automationStatus(now);
+  assert.deepEqual(au.rows.slice(0, 5).map((r) => r.key), ['engine', 'research', 'writing', 'sending', 'mailbox']);
+  for (const r of au.rows) assert.ok(r.state && r.reason, `${r.key} explains itself`);
+  const tl = au.timeline;
+  assert.equal(tl.start, '2026-11-08T19:00:00.000Z'); assert.equal(tl.span, 1440); assert.equal(tl.hours, 24);
+  // Sunday's window ends at 1 AM Karachi; Monday's opens at 7 PM Karachi
+  assert.deepEqual(tl.rows.find((r) => r.key === 'sending').windows, [[0, 60], [1140, 1440]]);
+  // Mon–Fri only: from Saturday the next window is Monday 9 AM New York
+  setSetting('send_days', '1,2,3,4,5');
+  assert.equal(nextWindowStart(new Date('2026-11-07T10:00:00Z')).toISOString(), '2026-11-09T14:00:00.000Z');
+  assert.deepEqual(automationStatus(now).timeline.rows.find((r) => r.key === 'sending').windows, [[1140, 1440]], 'no Sunday window');
+  setSetting('send_days', '0,1,2,3,4,5,6'); setSetting('report_timezone', '');
+});

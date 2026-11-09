@@ -23,6 +23,7 @@ import * as jobs from '../services/jobs.js';
 import * as engine from '../services/engine.js';
 import * as sources from '../services/sources.js';
 import * as insights from '../services/insights.js';
+import * as automation from '../services/automation.js';
 import * as performance from '../services/performance.js';
 import * as hunter from '../integrations/hunter.js';
 import { PRESETS } from '../lib/places.js';
@@ -69,6 +70,8 @@ api.get('/insights/missing', h(() => inv.topMissing(companies.evaluateCompany)))
 api.get('/insights/series', h((req) => insights.series(req.query.days)));
 api.get('/insights/overview', h(() => insights.overview()));
 api.get('/insights/daily', h((req) => insights.daily({ days: Math.min(90, Number(req.query.days) || 30) })));
+// What runs automatically, why it is waiting, and when it runs next (in your timezone)
+api.get('/automation', h(() => automation.automationStatus()));
 api.get('/performance', h(() => performance.report()));
 api.put('/performance/platform', h((req) => ({ labels: performance.setPlatform(String(req.body?.origin || ''), req.body?.platform) })));
 

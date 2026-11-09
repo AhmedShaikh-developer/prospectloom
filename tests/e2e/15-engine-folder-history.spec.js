@@ -78,7 +78,8 @@ test.describe.serial('Lead engine, leads folder & contact history', () => {
     expect((await api(request, 'GET', '/engine')).paused.code).toBe('cap');
     await page.goto('/#/engine');
     await expect(page.getByTestId('engine-paused')).toContainText('Daily limit reached');
-    await expect(page.getByTestId('engine-paused')).toContainText('continues automatically after midnight');
+    await expect(page.getByTestId('engine-paused')).toContainText('starts again by itself at midnight');
+    await expect(page.getByTestId('engine-resumes')).toContainText(/Next search: tomorrow 12:00\sAM \(in \d/);
     await api(request, 'PUT', '/engine', { engine_daily_cap: '1500' });
     expect((await api(request, 'GET', '/engine')).paused?.code).not.toBe('cap'); // ("done" here: the only city was already searched)
     await api(request, 'PUT', '/engine', { engine_enabled: '0' });

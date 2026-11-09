@@ -149,6 +149,80 @@ function drawGauge(el, spec) {
   animateMarks(el);
 }
 
+/**
+ * One day, hour by hour (your timezone): a row per automatic job with its activity per hour,
+ * the sending hours, stretches where it was paused, exact send times (● sent, ○ planned) and "now".
+ */
+let dayUid = 0;
+function drawDay(el, spec) {
+  const W = Math.max(300, el.clientWidth);
+  const narrow = W < 560;
+  const padL = narrow ? 84 : 112; const padR = 10; const padT = 22; const padB = 22; const rowH = 26; const gap = 12;
+  const rows = spec.rows; const span = spec.span; const hours = spec.hours;
+  const H = padT + rows.length * (rowH + gap) - gap + padB;
+  const plotW = W - padL - padR; const hourW = plotW / hours;
+  const x = (m) => padL + (Math.max(0, Math.min(span, m)) / span) * plotW;
+  const yTop = (i) => padT + i * (rowH + gap);
+  const id = `hatch-${++dayUid}`;
+  let svg = `<defs><pattern id="${id}" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" class="day-pause-bg"/><line x1="0" y1="0" x2="0" y2="6" class="day-pause-line"/></pattern></defs>`;
+  // hour grid + labels (every 3 h; every 6 h when narrow)
+  const step = narrow ? 6 : 3;
+  for (let h = 0; h <= hours; h += step) {
+    const gx = padL + h * hourW;
+    svg += `<line class="gl" x1="${gx}" x2="${gx}" y1="${padT - 4}" y2="${H - padB + 2}"/>`;
+    svg += `<text class="ax" x="${gx}" y="${H - 6}" text-anchor="${h === 0 ? 'start' : h >= hours ? 'end' : 'middle'}">${esc(spec.labels[h] || '')}</text>`;
+  }
+  rows.forEach((r, i) => {
+    const y0 = yTop(i);
+    svg += `<text class="ax day-l" x="${padL - 10}" y="${y0 + rowH / 2 + 4}" text-anchor="end">${esc(narrow ? r.short || r.label : r.label)}</text>`;
+    svg += `<rect class="day-track" x="${padL}" y="${y0}" width="${plotW}" height="${rowH}" rx="6"/>`;
+    for (const [a, b] of r.windows || []) svg += `<rect class="day-win" x="${x(a)}" y="${y0}" width="${Math.max(2, x(b) - x(a))}" height="${rowH}" rx="6" style="stroke:${r.color};fill:${r.color}"/>`;
+    for (const [a, b, why] of r.paused || []) {
+      const w = Math.max(2, x(b) - x(a));
+      svg += `<rect class="day-pause" x="${x(a)}" y="${y0}" width="${w}" height="${rowH}" rx="6" fill="url(#${id})"/>`;
+      if (w > 150) svg += `<text class="ax day-pl" x="${x(a) + 10}" y="${y0 + rowH / 2 + 4}">Paused · ${esc(why)}</text>`;
+    }
+    if (!r.marks) {
+      const max = Math.max(1, ...r.values);
+      r.values.forEach((v, h) => {
+        if (!v) return;
+        const bw = Math.max(2, hourW - 3); const bx = padL + h * hourW + 1.5;
+        const base = y0 + rowH - 2; const top = base - Math.max(3, (v / max) * (rowH - 6)); const rr = Math.min(3, bw / 2, base - top);
+        svg += `<path class="bar-mark" style="--i:${h};fill:${r.color}" d="M${bx},${base}V${top + rr}Q${bx},${top} ${bx + rr},${top}H${bx + bw - rr}Q${bx + bw},${top} ${bx + bw},${top + rr}V${base}Z"/>`;
+      });
+    }
+    for (const m of r.planned || []) svg += `<circle class="day-plan" cx="${x(m)}" cy="${y0 + rowH / 2}" r="4" style="stroke:${r.color}"/>`;
+    for (const m of r.marks || []) svg += `<circle class="dot" cx="${x(m)}" cy="${y0 + rowH / 2}" r="4.5" style="fill:${r.color}"/>`;
+  });
+  const nx = x(spec.nowMin);
+  svg += `<rect class="day-hover" x="0" y="${padT - 4}" width="${hourW}" height="${H - padT - padB + 6}" rx="4" opacity="0"/>`;
+  svg += `<line class="marker" x1="${nx}" x2="${nx}" y1="${padT - 6}" y2="${H - padB + 2}"/><text class="ax marker-t" x="${nx}" y="12" text-anchor="${nx > W - 90 ? 'end' : nx < padL + 60 ? 'start' : 'middle'}">${esc(spec.nowLabel || 'now')}</text>`;
+  el.style.height = `${H}px`;
+  el.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${svg}</svg><div class="viz-tip" hidden></div>`
+    + `<div class="sr-only"><table><thead><tr><th>Hour</th>${rows.map((r) => `<th>${esc(r.label)} (${esc(r.unit)})</th>`).join('')}</tr></thead><tbody>${Array.from({ length: hours }, (_, h) => `<tr><td>${esc(spec.labels[h])}</td>${rows.map((r) => `<td>${r.values[h] || 0}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  animateMarks(el);
+  // hover: the hour under the pointer → its column highlighted + every row's value for that hour
+  const svgEl = el.querySelector('svg'); const tip = el.querySelector('.viz-tip'); const col = el.querySelector('.day-hover');
+  const inside = (list, h) => (list || []).find(([a, b]) => a < (h + 1) * 60 && b > h * 60);
+  svgEl.addEventListener('mousemove', (ev) => {
+    const px = ev.clientX - svgEl.getBoundingClientRect().left;
+    if (px < padL) { tip.hidden = true; col.setAttribute('opacity', '0'); return; }
+    const h = Math.max(0, Math.min(hours - 1, Math.floor((px - padL) / hourW)));
+    col.setAttribute('x', padL + h * hourW); col.setAttribute('opacity', '1');
+    const lines = rows.map((r) => {
+      const p = inside(r.paused, h); const w = inside(r.windows, h);
+      const note = p ? ` <span class="muted">· paused</span>` : w ? ' <span class="muted">· sending hours</span>' : '';
+      return `<div class="tip-row"><span class="sw" style="background:${r.color}"></span><span>${esc(r.label)}${note}</span><strong>${fmt(r.values[h])}</strong></div>`;
+    }).join('');
+    tip.innerHTML = `<div class="tip-h">${esc(spec.labels[h])} – ${esc(spec.labels[h + 1] || '')}</div>${lines}<div class="hint small-t" style="margin-top:4px">${rows.map((r) => esc(r.unit)).join(' · ')}</div>`;
+    tip.hidden = false;
+    const cx = padL + (h + 1) * hourW;
+    const tx = cx + 10 + tip.offsetWidth > W ? padL + h * hourW - tip.offsetWidth - 10 : cx + 10;
+    tip.style.transform = `translate(${Math.max(0, tx)}px, ${padT}px)`;
+  });
+  svgEl.addEventListener('mouseleave', () => { tip.hidden = true; col.setAttribute('opacity', '0'); });
+}
+
 // ---------------------------------------------------------------- animation helpers
 function animateMarks(el) {
   if (reduced()) return;
@@ -162,7 +236,7 @@ function animateMarks(el) {
   el.querySelectorAll('.bar-mark').forEach((p) => p.classList.add('grow'));
 }
 
-const DRAW = { area: drawSeriesChart, line: drawSeriesChart, bars: drawSeriesChart, spark: drawSpark, gauge: drawGauge };
+const DRAW = { area: drawSeriesChart, line: drawSeriesChart, bars: drawSeriesChart, spark: drawSpark, gauge: drawGauge, day: drawDay };
 
 export function hydrateCharts(root = document) {
   root.querySelectorAll('.chart[data-spec]').forEach((el) => {

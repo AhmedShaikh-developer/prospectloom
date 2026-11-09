@@ -272,6 +272,64 @@ function autopilotCard(d, ap, ov) {
     <div id="ap-result"></div></div>`;
 }
 
+// ---------------------------------------------------------------- automation schedule: what runs when, and why it waits
+const AUTO_STATE = { running: ['info', 'Running now'], active: ['ok', 'On'], waiting: ['', 'Waiting'], paused: ['warn', 'Paused'], done: ['ok', 'Done for now'], attention: ['warn', 'Needs you'], blocked: ['bad', 'Blocked'], off: ['', 'Off'] };
+const AUTO_COLOR = { engine: 'var(--s2)', research: 'var(--s3)', sending: 'var(--s1)' };
+const AUTO_SHORT = { engine: 'Leads', research: 'Research', sending: 'Sending' };
+
+/** A moment in the user's timezone: "7:00 PM", "tomorrow 12:00 AM", "Dec 8, 9:44 PM". */
+function clockIn(iso, tz, now = new Date()) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const key = (x) => x.toLocaleDateString('en-CA', { timeZone: tz || undefined });
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: tz || undefined });
+  const days = Math.round((Date.parse(key(d)) - Date.parse(key(now))) / 86400000);
+  return days === 0 ? time : days === 1 ? `tomorrow ${time}` : days === -1 ? `yesterday ${time}` : `${d.toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: tz || undefined })}, ${time}`;
+}
+/** "in 3 h 37 min" / "12 min ago" */
+function relTime(iso, now = new Date()) {
+  const ms = new Date(iso) - now; const m = Math.round(Math.abs(ms) / 60000);
+  if (m < 1) return ms >= 0 ? 'any moment' : 'just now';
+  const t = m < 60 ? `${m} min` : m < 1440 ? `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}` : `${Math.floor(m / 1440)} d${Math.floor((m % 1440) / 60) ? ` ${Math.floor((m % 1440) / 60)} h` : ''}`;
+  return ms >= 0 ? `in ${t}` : `${t} ago`;
+}
+
+function automationCard(au) {
+  const now = new Date(au.now); const tz = au.timezone;
+  const at = (iso) => clockIn(iso, tz, now);
+  const row = (r) => {
+    const [tone, text] = AUTO_STATE[r.state] || ['', r.state];
+    const pct = r.progress?.max ? Math.min(100, Math.round((r.progress.value / r.progress.max) * 100)) : null;
+    const win = r.window ? ` <span class="muted" data-testid="auto-window">That is ${at(r.window.start)} – ${at(r.window.end)} your time.</span>` : '';
+    const next = !r.next ? '<span class="muted">—</span>'
+      : new Date(r.next) <= now ? '<strong>due now</strong><span class="muted small-t">within a minute</span>'
+        : `<strong>${at(r.next)}</strong><span class="muted small-t">${relTime(r.next, now)}</span>`;
+    return `<div class="auto-row st-${r.state}" data-testid="auto-row" data-key="${esc(r.key)}">
+      <div class="auto-name"><span class="auto-dot" aria-hidden="true"></span><a href="${r.href}">${esc(r.label)}</a></div>
+      <div class="auto-state" data-testid="auto-state">${badge(tone, text)}</div>
+      <div class="auto-why"><span data-testid="auto-reason">${esc(r.reason)}</span>${win}
+        ${pct != null ? `<div class="auto-prog"><div class="bar ${r.state === 'paused' ? 'warn' : ''}"><span style="width:${pct}%"></span></div><span class="small-t muted">${n(r.progress.value)} / ${n(r.progress.max)} ${esc(r.progress.label)}</span></div>` : ''}
+        ${r.fix ? `<a class="small-t auto-fix" href="${r.fix.href}">${esc(r.fix.text)} →</a>` : ''}</div>
+      <div class="auto-when"><span class="auto-k">Last run</span>${r.last ? `<span>${at(r.last)}</span><span class="muted small-t">${relTime(r.last, now)}</span>` : '<span class="muted">—</span>'}</div>
+      <div class="auto-when" data-testid="auto-next"><span class="auto-k">${esc(r.nextLabel || 'Next run')}</span>${next}</div>
+    </div>`;
+  };
+  const counts = Object.entries(au.rows.reduce((m, r) => ({ ...m, [r.state]: (m[r.state] || 0) + 1 }), {}))
+    .map(([s, k]) => `${k} ${(AUTO_STATE[s]?.[1] || s).toLowerCase()}`).join(' · ');
+  const tl = au.timeline;
+  const labels = Array.from({ length: tl.hours + 1 }, (_, h) => new Date(Date.parse(tl.start) + h * 3600000).toLocaleTimeString([], { hour: 'numeric', timeZone: tz || undefined }));
+  const spec = { type: 'day', span: tl.span, hours: tl.hours, nowMin: tl.nowMin, nowLabel: `Now ${at(au.now)}`, labels,
+    rows: tl.rows.map((r) => ({ ...r, color: AUTO_COLOR[r.key], short: AUTO_SHORT[r.key] })) };
+  return `<div class="card reveal span-12" data-testid="automation">
+    <div class="card-head"><h2>${ic('clock')}Automation schedule</h2><span class="hint" data-testid="auto-now">now ${esc(at(au.now))} your time (${esc(tz)}) · ${esc(counts)}</span></div>
+    <p class="sub small-t" style="margin:-4px 0 4px">What runs by itself, why something is waiting, and when it runs next. Everything runs while this app is running: on this computer now, around the clock once it is on a server.</p>
+    <div class="auto-list" data-testid="auto-list">${au.rows.map(row).join('')}</div>
+    <div data-testid="auto-timeline"><div class="card-head" style="margin:18px 0 6px"><h3 style="margin:0">Today, hour by hour</h3>
+      <div class="legend"><span class="legend-i"><span class="sw" style="background:var(--s2)"></span>Lead searches</span><span class="legend-i"><span class="sw" style="background:var(--s3)"></span>Leads checked</span><span class="legend-i"><span class="sw dot" style="background:var(--s1)"></span>Email sent</span><span class="legend-i"><span class="sw ring"></span>Planned send</span><span class="legend-i"><span class="sw win"></span>Sending hours</span><span class="legend-i"><span class="sw hatch"></span>Paused</span></div></div>
+      ${chart(spec, { height: 150, label: 'Today hour by hour: lead searches, leads checked and emails sent, with the sending hours and paused periods' })}</div>
+  </div>`;
+}
+
 /** Today, yesterday … 7 days ago, plus 7-day / 30-day / all-time totals — in YOUR timezone. */
 function dayByDayCard(dd) {
   const fmtDay = (k, i) => {
@@ -294,7 +352,7 @@ function insightsList(d, ov, eng) {
   const c = ov.composition; const w = ov.warmup; const out = [];
   const perDay = d.today.limit || 1;
   out.push(`<strong>${n(c.ready)}</strong> companies are ready to email — about <strong>${n(Math.ceil(c.ready / perDay))} days</strong> of sending at ${perDay} a day.`);
-  if (eng?.targets) out.push(`The lead engine has run <strong>${n(eng.searched)} of ${n(eng.targets)}</strong> searches and added <strong>${n(eng.imported)}</strong> businesses${eng.enabled ? ' — it keeps going around the clock' : ' (paused)'}.`);
+  if (eng?.targets) out.push(`The lead engine has run <strong>${n(eng.searched)} of ${n(eng.targets)}</strong> searches and added <strong>${n(eng.imported)}</strong> businesses${!eng.enabled ? ' (paused)' : eng.paused?.code === 'cap' ? ' — it reached today\'s limit and starts again at midnight' : ' — it keeps going around the clock'}.`);
   if (c.offline) out.push(`Research retired <strong>${n(c.offline)}</strong> companies whose website no longer exists, so your list stays clean.`);
   const hunter = ov.sourceStates.find((s) => s.name === 'hunter');
   if (c.no_email) out.push(`<strong>${n(c.no_email)}</strong> companies publish no email on their website. ${hunter?.configured && hunter.enabled ? `Hunter.io is looking them up${hunter.status === 'waiting_credits' ? ' (waiting for credits to renew)' : ''}.` : '<a href="#/integrations">Connect Hunter.io</a> to find them automatically.'}`);
@@ -304,7 +362,7 @@ function insightsList(d, ov, eng) {
 }
 
 async function renderDashboard() {
-  const [d, missing, ap, ov, se, eng, dd] = await Promise.all([GET('/dashboard'), GET('/insights/missing'), GET('/autopilot/status'), GET('/insights/overview'), GET(`/insights/series?days=${dashRange}`), GET('/engine').catch(() => null), GET('/insights/daily?days=30')]);
+  const [d, missing, ap, ov, se, eng, dd, au] = await Promise.all([GET('/dashboard'), GET('/insights/missing'), GET('/autopilot/status'), GET('/insights/overview'), GET(`/insights/series?days=${dashRange}`), GET('/engine').catch(() => null), GET('/insights/daily?days=30'), GET('/automation').catch(() => null)]);
   const inv = d.inventory; const f = d.funnel; const t = d.today; const c = ov.composition;
   const reserveBar = (r) => {
     const pct = Math.min(100, Math.round((inv.eligibleUnsent / (r.demand || 1)) * 100));
@@ -369,6 +427,8 @@ async function renderDashboard() {
     </div>
 
     <div class="dash mt">
+      ${au ? automationCard(au) : ''}
+
       <div class="card hero reveal span-8" data-testid="hero">
         <div class="card-head" style="align-items:flex-start">
           <div><div class="eyebrow">${ic('trend')}Leads collected · last ${dashRange} days</div>
@@ -458,8 +518,8 @@ async function renderEngine() {
     ${head('Lead engine', 'Finds new leads 24/7: it works through every business type × city you choose, adds businesses that have their own website, and research checks each one for a published email. No manual searching.',
     `<button id="eng-run" data-testid="engine-run-now">${ic('play')}Run one search now</button><button id="eng-toggle" class="${e.enabled ? '' : 'primary'}" data-testid="engine-toggle">${e.enabled ? 'Pause engine' : `${ic('bolt')}Start engine`}</button>`)}
     <div class="card autopilot ${e.enabled ? 'on' : ''}" data-testid="engine-status">
-      <div class="card-head"><h2>${ic('bolt')}Status ${e.enabled ? badge('ok', 'Running 24/7') : badge('warn', 'Paused')}</h2><span class="hint">${e.lastRun ? `last search ${since(e.lastRun)} (${fmtDate(e.lastRun)})` : 'no searches yet'}</span></div>
-      ${e.paused ? `<div class="int-msg warn" style="margin:0 0 14px" data-testid="engine-paused">${ic('clock')} ${esc(e.paused.text)}${e.paused.code === 'cap' ? ' You can raise the limit under “Pace” below.' : ''}</div>` : ''}
+      <div class="card-head"><h2>${ic('bolt')}Status ${!e.enabled ? badge('warn', 'Paused') : e.paused?.code === 'cap' ? badge('warn', 'Paused until midnight') : e.paused ? badge('', 'Waiting') : badge('ok', 'Running 24/7')}</h2><span class="hint">${e.lastRun ? `last search ${since(e.lastRun)} (${fmtDate(e.lastRun)})` : 'no searches yet'}</span></div>
+      ${e.paused ? `<div class="int-msg warn" style="margin:0 0 14px" data-testid="engine-paused">${ic('clock')} <span>${esc(e.paused.text)}${e.paused.resumesAt ? ` <strong data-testid="engine-resumes">Next search: ${esc(clockIn(e.paused.resumesAt, e.timezone))} (${esc(relTime(e.paused.resumesAt))}).</strong>` : ''}${e.paused.code === 'cap' ? ' You can raise the limit under “Pace” below.' : ''}</span></div>` : ''}
       ${e.running ? `<div class="working" style="margin:0 0 14px"><span class="spin"></span><div><strong>${esc(e.running.message || e.running.label)}</strong><div class="small-t muted">started ${ago(e.running.started_at)} ago</div></div></div>` : ''}
       <div class="ap-steps">
         <div class="ap-step"><div class="grow"><div class="ap-t">${ic('search')}Searches done</div><div class="ap-v" data-testid="engine-searched">${n(e.searched)} / ${n(e.targets)}</div><div class="bar"><span style="width:${pct}%"></span></div><div class="hint">${e.errors ? `${e.errors} will retry · ` : ''}${e.etaHours ? `≈ ${e.etaHours} h to finish this sweep` : e.targets ? 'sweep complete — re-checking on schedule' : 'set up below'}</div>

@@ -1,6 +1,7 @@
 // Time series and summaries for the dashboard charts. Read-only.
 import { q } from '../db/index.js';
 import { getSetting } from '../lib/settings.js';
+import { reportTimezone, parseTs } from '../lib/clock.js';
 import { warmupPlan, bounceGuard, sendPlan } from './outreach.js';
 import { listSources } from './sources.js';
 import { report, platformOf } from './performance.js';
@@ -99,8 +100,7 @@ export function overview() {
 // ---------------------------------------------------------------- day by day, in YOUR timezone
 // Reports follow your own calendar (report_timezone, default: this computer's timezone), so "today"
 // resets at your midnight. The sending limit keeps using the recipients' day (send_timezone).
-export const reportTimezone = () => getSetting('report_timezone') || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-const parseTs = (t) => new Date(/[zZ]$|[+-]\d{2}:?\d{2}$/.test(String(t)) ? t : `${String(t).replace(' ', 'T')}Z`);
+export { reportTimezone };
 function dayKey(d, tz) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d).map((x) => [x.type, x.value]));
   return `${p.year}-${p.month}-${p.day}`;
