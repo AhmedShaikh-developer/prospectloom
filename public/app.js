@@ -143,6 +143,7 @@ const routes = {
   settings: renderSettings,
   integrations: renderIntegrations,
   performance: renderPerformance,
+  automation: renderAutomation,
 };
 
 // Page changes take turns: a slow page that finishes late can never overwrite the page you opened after it.
@@ -152,7 +153,7 @@ function route() {
   return routeChain;
 }
 // Live pages re-load their numbers every minute (quietly: no animations, scroll position kept).
-const LIVE_PAGES = new Set(['dashboard', 'engine', 'research']);
+const LIVE_PAGES = new Set(['dashboard', 'automation', 'engine', 'research']);
 let quietRender = false; let lastRender = Date.now();
 setInterval(() => {
   const name = (location.hash.replace(/^#\/?/, '') || 'dashboard').split(/[/?]/)[0];
@@ -294,7 +295,9 @@ function relTime(iso, now = new Date()) {
   return ms >= 0 ? `in ${t}` : `${t} ago`;
 }
 
-function automationCard(au) {
+/** Automation schedule page: every automatic job right now, then today hour by hour. */
+async function renderAutomation() {
+  const au = await GET('/automation');
   const now = new Date(au.now); const tz = au.timezone;
   const at = (iso) => clockIn(iso, tz, now);
   const row = (r) => {
@@ -320,14 +323,16 @@ function automationCard(au) {
   const labels = Array.from({ length: tl.hours + 1 }, (_, h) => new Date(Date.parse(tl.start) + h * 3600000).toLocaleTimeString([], { hour: 'numeric', timeZone: tz || undefined }));
   const spec = { type: 'day', span: tl.span, hours: tl.hours, nowMin: tl.nowMin, nowLabel: `Now ${at(au.now)}`, labels,
     rows: tl.rows.map((r) => ({ ...r, color: AUTO_COLOR[r.key], short: AUTO_SHORT[r.key] })) };
-  return `<div class="card reveal span-12" data-testid="automation">
-    <div class="card-head"><h2>${ic('clock')}Automation schedule</h2><span class="hint" data-testid="auto-now">now ${esc(at(au.now))} your time (${esc(tz)}) · ${esc(counts)}</span></div>
-    <p class="sub small-t" style="margin:-4px 0 4px">What runs by itself, why something is waiting, and when it runs next. Everything runs while this app is running: on this computer now, around the clock once it is on a server.</p>
-    <div class="auto-list" data-testid="auto-list">${au.rows.map(row).join('')}</div>
-    <div data-testid="auto-timeline"><div class="card-head" style="margin:18px 0 6px"><h3 style="margin:0">Today, hour by hour</h3>
+  app.innerHTML = `
+    ${head('Automation schedule', 'What runs by itself, why something is waiting, and when it runs next. Everything runs while this app is running: on this computer now, around the clock once it is on a server.')}
+    <div class="dash" data-testid="automation">
+    <div class="card reveal span-12"><div class="card-head"><h2>${ic('clock')}Right now</h2><span class="hint" data-testid="auto-now">now ${esc(at(au.now))} your time (${esc(tz)}) · ${esc(counts)}</span></div>
+      <div class="auto-list" data-testid="auto-list">${au.rows.map(row).join('')}</div></div>
+    <div class="card reveal span-12" data-testid="auto-timeline"><div class="card-head"><h2>${ic('chart')}Today, hour by hour</h2>
       <div class="legend"><span class="legend-i"><span class="sw" style="background:var(--s2)"></span>Lead searches</span><span class="legend-i"><span class="sw" style="background:var(--s3)"></span>Leads checked</span><span class="legend-i"><span class="sw dot" style="background:var(--s1)"></span>Email sent</span><span class="legend-i"><span class="sw ring"></span>Planned send</span><span class="legend-i"><span class="sw win"></span>Sending hours</span><span class="legend-i"><span class="sw hatch"></span>Paused</span></div></div>
-      ${chart(spec, { height: 150, label: 'Today hour by hour: lead searches, leads checked and emails sent, with the sending hours and paused periods' })}</div>
-  </div>`;
+      ${chart(spec, { height: 150, label: 'Today hour by hour: lead searches, leads checked and emails sent, with the sending hours and paused periods' })}
+      <p class="hint small-t" style="margin:8px 0 0">Your time (${esc(tz)}). Point at an hour to see what happened in it. Sending hours follow your recipients' clock (${esc(au.sendTimezone || '')}).</p></div>
+    </div>`;
 }
 
 /** Today, yesterday … 7 days ago, plus 7-day / 30-day / all-time totals — in YOUR timezone. */
@@ -362,7 +367,7 @@ function insightsList(d, ov, eng) {
 }
 
 async function renderDashboard() {
-  const [d, missing, ap, ov, se, eng, dd, au] = await Promise.all([GET('/dashboard'), GET('/insights/missing'), GET('/autopilot/status'), GET('/insights/overview'), GET(`/insights/series?days=${dashRange}`), GET('/engine').catch(() => null), GET('/insights/daily?days=30'), GET('/automation').catch(() => null)]);
+  const [d, missing, ap, ov, se, eng, dd] = await Promise.all([GET('/dashboard'), GET('/insights/missing'), GET('/autopilot/status'), GET('/insights/overview'), GET(`/insights/series?days=${dashRange}`), GET('/engine').catch(() => null), GET('/insights/daily?days=30')]);
   const inv = d.inventory; const f = d.funnel; const t = d.today; const c = ov.composition;
   const reserveBar = (r) => {
     const pct = Math.min(100, Math.round((inv.eligibleUnsent / (r.demand || 1)) * 100));
@@ -427,8 +432,6 @@ async function renderDashboard() {
     </div>
 
     <div class="dash mt">
-      ${au ? automationCard(au) : ''}
-
       <div class="card hero reveal span-8" data-testid="hero">
         <div class="card-head" style="align-items:flex-start">
           <div><div class="eyebrow">${ic('trend')}Leads collected · last ${dashRange} days</div>

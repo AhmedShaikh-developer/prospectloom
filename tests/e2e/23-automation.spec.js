@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { api } from './helpers.js';
 
-// The dashboard explains what runs by itself, why something is waiting, and when it runs next.
+// Its own page (left menu) explains what runs by itself, why something is waiting, and when it runs next.
 test.describe.serial('Automation schedule', () => {
   const hourIn = (tz) => Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: '2-digit', hourCycle: 'h23' }).format(new Date())) % 24;
 
@@ -13,6 +13,12 @@ test.describe.serial('Automation schedule', () => {
     expect(au.timeline.rows[0].values).toHaveLength(au.timeline.hours);
 
     await page.goto('/#/dashboard');
+    await expect(page.getByTestId('hero')).toBeVisible();
+    await expect(page.getByTestId('automation')).toHaveCount(0); // not on the dashboard
+    await page.locator('nav a[data-nav="automation"]').click();
+    await expect(page).toHaveURL(/#\/automation$/);
+    await expect(page.locator('main h1')).toHaveText('Automation schedule');
+    await expect(page.locator('nav a[data-nav="automation"]')).toHaveClass(/active/);
     const card = page.getByTestId('automation');
     await expect(card).toBeVisible();
     await expect(card.getByTestId('auto-now')).toContainText('your time');
@@ -31,7 +37,7 @@ test.describe.serial('Automation schedule', () => {
     const eng = (await api(request, 'GET', '/automation')).rows.find((r) => r.key === 'engine');
     expect(eng.state).toBe('paused');
     expect(eng.nextLabel).toBe('Starts again');
-    await page.goto('/#/dashboard');
+    await page.goto('/#/automation');
     const row = page.locator('[data-testid="auto-row"][data-key="engine"]');
     await expect(row.getByTestId('auto-state')).toHaveText('Paused');
     await expect(row.getByTestId('auto-reason')).toContainText('Daily limit reached');
@@ -51,7 +57,7 @@ test.describe.serial('Automation schedule', () => {
       expect(s.state).toBe('waiting');
       expect(s.nextLabel).toBe('Sending starts');
       expect(new Date(s.next).getTime()).toBeGreaterThan(Date.now());
-      await page.goto('/#/dashboard');
+      await page.goto('/#/automation');
       const row = page.locator('[data-testid="auto-row"][data-key="sending"]');
       await expect(row.getByTestId('auto-reason')).toContainText('Outside sending hours');
       await expect(row.getByTestId('auto-window')).toContainText('your time');
@@ -62,9 +68,9 @@ test.describe.serial('Automation schedule', () => {
   });
 
   test('today, hour by hour: one row per job, with a tooltip for each hour', async ({ page }) => {
-    await page.goto('/#/dashboard');
+    await page.goto('/#/automation');
     const tl = page.getByTestId('auto-timeline');
-    const svg = tl.locator('svg');
+    const svg = tl.locator('.chart svg');
     await expect(svg).toBeVisible();
     await expect(svg.locator('.day-track')).toHaveCount(3);
     await expect(svg.locator('.marker-t')).toContainText('Now');

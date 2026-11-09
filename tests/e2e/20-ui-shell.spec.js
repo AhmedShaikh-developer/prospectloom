@@ -40,7 +40,6 @@ test.describe('App shell, themes & charts', () => {
     await expect(page.getByTestId('deliverability').locator('.chart svg')).toBeVisible();
     await expect(page.getByTestId('warmup-card').locator('svg path.line-mark')).toHaveCount(1);
     const svg = hero.locator('.chart svg');
-    await svg.scrollIntoViewIfNeeded(); // below the automation schedule
     const b = await svg.boundingBox();
     await page.mouse.move(b.x + b.width * 0.7, b.y + b.height / 2);
     await expect(hero.locator('.viz-tip')).toBeVisible();
