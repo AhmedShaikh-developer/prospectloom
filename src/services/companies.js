@@ -4,6 +4,7 @@ import { evaluate } from '../lib/qualification.js';
 import { getSetting, getNum, getBool } from '../lib/settings.js';
 import { findConflicts } from './suppression.js';
 import { STATUS } from '../lib/constants.js';
+import { GAP_GROUPS, GAP_LABELS } from '../lib/audit.js';
 import { platformOf } from './performance.js';
 
 // Fields a user (or importer) may set directly.
@@ -190,7 +191,7 @@ export function setStatusManually(id, status, reason, actor = 'user') {
   return getCompany(id);
 }
 
-export function listCompanies({ status, offer, search, contacted, hasEmail, origin, site, limit = 200, offset = 0, sort = 'updated' } = {}) {
+export function listCompanies({ status, offer, search, contacted, hasEmail, origin, site, gap, limit = 200, offset = 0, sort = 'updated' } = {}) {
   const where = [];
   const p = { limit: Math.min(Number(limit) || 200, 1000), offset: Number(offset) || 0 };
   if (status) {
@@ -206,6 +207,10 @@ export function listCompanies({ status, offer, search, contacted, hasEmail, orig
   if (origin) { where.push('lead_origin LIKE :origin'); p.origin = `${origin}%`; }
   if (['blocked', 'offline', 'no_web'].includes(site)) { where.push('site_status = :site'); p.site = site; }
   if (search) { where.push('(name LIKE :search OR domain LIKE :search OR contact_email LIKE :search OR dm_name LIKE :search)'); p.search = `%${search}%`; }
+  // Website gaps found by the audit (e.g. "booking" = no online booking), or "audited" = any audit done
+  const group = GAP_GROUPS.find(([k]) => k === gap);
+  if (group) { where.push(`(${group[2].map((k, i) => `gaps LIKE :g${i}`).join(' OR ')})`); group[2].forEach((k, i) => { p['g' + i] = `%,${k},%`; }); }
+  else if (gap && GAP_LABELS[gap]) { where.push('gaps LIKE :g0'); p.g0 = `%,${gap},%`; }
   const order = { updated: 'updated_at DESC', fit: 'fit_score DESC NULLS LAST, updated_at DESC', name: 'name COLLATE NOCASE ASC', created: 'created_at DESC' }[sort] || 'updated_at DESC';
   const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const rows = q.all(`SELECT * FROM companies ${w} ORDER BY ${order} LIMIT :limit OFFSET :offset`, p);

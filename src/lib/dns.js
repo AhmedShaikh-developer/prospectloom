@@ -102,9 +102,11 @@ export async function domainState(hostOrDomain) {
 
 /** Keep only results whose website domain still exists (used before importing map listings). */
 export async function dropDeadSites(results, { concurrency = 12 } = {}) {
-  const out = []; let dead = 0;
-  for (let i = 0; i < results.length; i += concurrency) {
-    const chunk = results.slice(i, i + concurrency);
+  // Businesses without a website (found by their listed email) have no site to check.
+  const out = results.filter((r) => r.noWebsite && !r.ownDomain); let dead = 0;
+  const check = results.filter((r) => !(r.noWebsite && !r.ownDomain));
+  for (let i = 0; i < check.length; i += concurrency) {
+    const chunk = check.slice(i, i + concurrency);
     const states = await Promise.all(chunk.map((r) => domainState(r.website || r.domain)));
     chunk.forEach((r, j) => { if (states[j] === 'nxdomain') dead++; else out.push(r); });
   }

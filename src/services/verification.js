@@ -2,7 +2,7 @@
 import { q, nowIso, today, logActivity } from '../db/index.js';
 import { scanWebsite, confirmEmailOnPage } from '../lib/siteScan.js';
 import { hasMx, mailAuth, domainState } from '../lib/dns.js';
-import { preferenceScore } from '../lib/emailRules.js';
+import { preferenceScore, assessEmail } from '../lib/emailRules.js';
 import { emailDomain } from '../lib/normalize.js';
 import { getCompany, reevaluate } from './companies.js';
 import { runDedup } from './suppression.js';
@@ -12,6 +12,17 @@ import { getSetting, getBool, getNum } from '../lib/settings.js';
 import { emailUsable } from '../lib/qualification.js';
 import { autoOffer } from '../lib/offers.js';
 import { suggestions } from '../lib/personalization.js';
+import { auditSite, auditNoWebsite } from '../lib/audit.js';
+import { isNoWebsiteDomain } from '../integrations/osm.js';
+
+/** Save a website audit on the company (findings for the email writer, gap keys for the lead filters). */
+export function saveAudit(id, audit) {
+  // gap_score: how much we have to say (the 3 strongest findings) — leads with clear gaps are emailed first.
+  q.run('UPDATE companies SET audit = :a, audit_at = :at, gaps = :g, gap_score = :gs WHERE id = :id', {
+    a: JSON.stringify(audit), at: audit.at, g: audit.gaps.length ? `,${audit.gaps.join(',')},` : '',
+    gs: audit.findings.slice(0, 3).reduce((t, f) => t + f.weight, 0), id,
+  });
+}
 
 const TRANSIENT = /ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|socket hang up|timed? ?out|aborted|network/i;
 const DAY = 86400_000;
@@ -57,8 +68,16 @@ export async function verifyCompany(id, { scan = true, useHubspot = true } = {})
   const before = { status: c.status, filled: countFilled(c) };
   const now = nowIso();
 
+  // 0. A business without a website (found on the map by its listed email): nothing to scan.
+  const noSite = c.site_status === 'none' || isNoWebsiteDomain(c.domain);
+  if (noSite) {
+    saveAudit(id, auditNoWebsite(c));
+    log.push('No website: the map listing is the source (business email published there)');
+    c = getCompany(id);
+  }
+
   // 1. Official website scan (fills blanks only, always with the page URL as source)
-  if (scan && !CONTACTED_STATUSES.has(c.status)) {
+  if (scan && !noSite && !CONTACTED_STATUSES.has(c.status)) {
     try {
       const s = await scanWithRetry(c.website || c.domain);
       const patch = { scan_at: now, scan_emails: JSON.stringify(s.emails), scan_facts: JSON.stringify({ ...s.facts, title: s.title, linkedin: s.linkedin }) };
@@ -91,8 +110,18 @@ export async function verifyCompany(id, { scan = true, useHubspot = true } = {})
               email_checked_at: now, email_source_confirmed: 1, email_auto_selected: 1,
             });
             log.push(`Selected published email ${pick.email} from ${pick.url}`);
+          } else if (!c.contact_email && c.listing_email && !assessEmail(c.listing_email, c.domain).blocked) {
+            // Nothing usable on the site, but the business publishes an email in its own map listing.
+            Object.assign(patch, {
+              contact_email: c.listing_email, email_source_url: c.us_presence_url || c.profile_url, email_evidence_type: 'map_listing', email_contact_type: 'general',
+              email_purpose: 'Business email published in its own map listing', email_checked_at: now, email_source_confirmed: 1, email_auto_selected: 1,
+            });
+            log.push(`No email on the site — using ${c.listing_email} from their map listing`);
           } else if (!c.contact_email) log.push(s.emails.length ? `Found ${s.emails.length} email(s) but none suitable for a vendor pitch` : 'No published email found on site');
         }
+        const audit = auditSite(s.signals, { ...c, ...patch });
+        saveAudit(id, audit);
+        log.push(`Website audit: ${audit.findings.length ? audit.findings.slice(0, 3).map((f) => f.key).join(', ') : 'no clear gaps found'}`);
         log.push(`Scanned ${s.pages.length} page(s)`);
       } else if (s.blocked || s.robotsBlocked) {
         patch.site_status = 'blocked';
@@ -107,6 +136,7 @@ export async function verifyCompany(id, { scan = true, useHubspot = true } = {})
           patch.site_status = 'no_web';
           nextScreen = later(30 * DAY);
           log.push('The domain exists but has no working website. Checked again in 30 days.');
+          if (c.contact_email || c.listing_email) saveAudit(id, auditNoWebsite(c, { email: c.contact_email || c.listing_email }));
         } else {
           log.push(`Website unreachable: ${s.errors.join('; ') || 'no pages loaded'}${(c.screen_count || 0) < 3 ? ' — will retry within the hour' : ''}`);
           if ((c.screen_count || 0) < 3) retrySoon = true;

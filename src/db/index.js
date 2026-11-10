@@ -35,7 +35,13 @@ export function getDb() {
 
 // Add columns introduced after a database was first created.
 const COLUMN_MIGRATIONS = {
-  companies: { dm_verified: 'INTEGER NOT NULL DEFAULT 0', scan_facts: 'TEXT', mail_auth: 'TEXT', site_status: 'TEXT', next_screen_at: 'TEXT', hunter_checked_at: 'TEXT' },
+  companies: { dm_verified: 'INTEGER NOT NULL DEFAULT 0', scan_facts: 'TEXT', mail_auth: 'TEXT', site_status: 'TEXT', next_screen_at: 'TEXT', hunter_checked_at: 'TEXT',
+    // website audit (JSON findings), gap keys for filtering, map-listing email, out-of-office pause, social page of a business without a website
+    audit: 'TEXT', audit_at: 'TEXT', gaps: 'TEXT', gap_score: 'INTEGER', listing_email: 'TEXT', followup_after: 'TEXT', social_url: 'TEXT' },
+  // writer: template | ai | human · ai_attempts/ai_error: AI writing retries · send_after/reply_ref/refs: answers to replies
+  messages: { writer: 'TEXT', ai_attempts: 'INTEGER NOT NULL DEFAULT 0', ai_error: 'TEXT', send_after: 'TEXT', reply_ref: 'INTEGER', refs: 'TEXT' },
+  // answer_state: queued | review | sent | handoff | skipped · ooo_until: return date read from an out-of-office reply
+  replies: { answer_state: 'TEXT', answer_note: 'TEXT', ooo_until: 'TEXT' },
 };
 function migrate(d) {
   for (const [table, cols] of Object.entries(COLUMN_MIGRATIONS)) {

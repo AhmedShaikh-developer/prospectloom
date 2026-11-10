@@ -84,7 +84,7 @@ CREATE INDEX IF NOT EXISTS idx_mail_history_domain ON mail_history(domain);
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL DEFAULT 'intro',  -- intro | follow_up
+  kind TEXT NOT NULL DEFAULT 'intro',  -- intro | follow_up | reply (an answer to their reply)
   to_email TEXT NOT NULL,
   subject TEXT NOT NULL,
   body TEXT NOT NULL,

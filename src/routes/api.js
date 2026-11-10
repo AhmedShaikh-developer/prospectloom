@@ -26,6 +26,8 @@ import * as insights from '../services/insights.js';
 import * as automation from '../services/automation.js';
 import * as performance from '../services/performance.js';
 import * as hunter from '../integrations/hunter.js';
+import * as responder from '../services/responder.js';
+import { GAP_GROUPS, GAP_LABELS } from '../lib/audit.js';
 import { PRESETS } from '../lib/places.js';
 import { normalizeDomain as normDomain, emailDomain as emDomain } from '../lib/normalize.js';
 import { getAllSettings, saveSettings, getSetting, getBool } from '../lib/settings.js';
@@ -51,6 +53,7 @@ api.get('/meta', h(() => ({
   testMode: config.testMode,
   offers: { A: 'A — Custom software & automation', B: 'B — White-label partnership (agencies)', C: 'C — Local / consumer businesses (B2C)' },
   finderCategories: osm.CATEGORIES.map(({ id, label, group, offer }) => ({ id, label, group, offer })),
+  gapGroups: GAP_GROUPS.map(([key, label]) => ({ key, label })), gapLabels: GAP_LABELS, answerModes: responder.MODES,
   cityPresets: Object.fromEntries(Object.entries(PRESETS).map(([k, v]) => [k, { label: v.label, cities: v.cities }])),
 })));
 
@@ -149,6 +152,14 @@ api.post('/companies/:id/use-email', h((req) => {
 
 // ---------- Email studio (per-lead email) ----------
 api.get('/companies/:id/studio', h((req) => outreach.studio(Number(req.params.id))));
+// Re-read their website now and list what is missing (the detailed email is written from this).
+api.post('/companies/:id/audit', h(async (req) => {
+  const c = companies.getCompany(Number(req.params.id));
+  if (!c) throw new Error('Company not found');
+  const audit = await outreach.ensureAudit(c, { refresh: true });
+  if (!audit) throw new Error(c.site_status === 'blocked' ? 'Their website blocks automated visits, so it cannot be audited (never bypassed).' : 'Their website could not be read right now. Try again later.');
+  return audit;
+}));
 api.post('/companies/:id/personalize', h((req) => {
   const id = Number(req.params.id);
   const c = companies.getCompany(id);
@@ -218,7 +229,7 @@ api.post('/finder/search', h(async (req) => {
   if (!req.body.async) return markKnown(await search());
   // Background search: the page can be left and the result is kept on the job.
   const label = `${osm.CATEGORIES.find((c) => c.id === params.category)?.label || params.customTag || 'Businesses'} in ${params.location}`;
-  const { id } = jobs.runJob('finder', `Finding ${label}`, params, async () => { const r = await search(); return { ...r, summary: `${r.results.length} businesses with a website` }; });
+  const { id } = jobs.runJob('finder', `Finding ${label}`, params, async () => { const r = await search(); return { ...r, summary: `${r.results.length - (r.noWebsite || 0)} businesses with a website${r.noWebsite ? ` + ${r.noWebsite} without one` : ''}` }; });
   return { jobId: id };
 }));
 function finderJob(id) {
@@ -252,7 +263,7 @@ api.get('/jobs/:id', h((req) => { const j = jobs.getJob(Number(req.params.id)); 
 
 // ---------- Lead engine (24/7) ----------
 const ENGINE_KEYS = ['engine_enabled', 'engine_categories', 'engine_locations', 'engine_searches_per_hour', 'engine_rescan_days', 'engine_daily_cap',
-  'engine_apollo_enabled', 'engine_apollo_keywords', 'engine_apollo_titles'];
+  'engine_apollo_enabled', 'engine_apollo_keywords', 'engine_apollo_titles', 'engine_no_website'];
 api.get('/engine', h(() => engine.status()));
 api.put('/engine', h((req) => {
   if (String(req.body.engine_enabled) === '1') {
@@ -334,6 +345,12 @@ api.get('/outreach/preview/:id', h((req) => {
 api.get('/replies', h((req) => replies.listReplies(req.query)));
 api.put('/replies/:id', h((req) => { replies.updateReply(Number(req.params.id), req.body); return { ok: true }; }));
 api.get('/replies/:id/suggest', h((req) => ({ text: replies.suggestedResponse(Number(req.params.id)) })));
+// Answers to replies (written by AI; sent automatically or after you approve, depending on the mode)
+api.post('/replies/:id/answer', h((req) => responder.answer(Number(req.params.id), { force: true })));
+api.post('/answers/:id/send', h((req) => responder.sendNow(Number(req.params.id))));
+api.put('/answers/:id', h((req) => responder.editAnswer(Number(req.params.id), req.body.body)));
+api.post('/answers/:id/cancel', h((req) => responder.cancelAnswer(Number(req.params.id))));
+api.get('/answers/status', h(() => responder.status()));
 api.post('/mailbox/sync', h(() => jobs.trackJob('mailbox', 'Syncing Hostinger mailbox', {}, async () => {
   const r = await replies.syncMailbox();
   return { ...r, summary: `${r.replies || 0} replies, ${r.bounces || 0} bounces, ${r.optOuts || 0} opt-outs` };
@@ -424,6 +441,8 @@ if (config.testMode) {
   api.post('/test/inbound', h((req) => replies.processInbound(req.body)));
   api.get('/test/captured', h(() => mailer.captured));
   api.post('/test/send-tick', h(() => outreach.autoSendTick()));
+  api.post('/test/responder-tick', h(() => responder.tick()));
+  api.post('/test/answer-due/:id', h((req) => { q.run("UPDATE messages SET send_after = datetime('now', '-1 minute') WHERE id = :id", { id: Number(req.params.id) }); return { ok: true }; }));
   api.post('/test/engine-tick', h((req) => engine.tick({ force: !!req.body?.force })));
   api.post('/test/sources-tick', h(() => sources.tick()));
   api.post('/test/age-message/:id', h((req) => {

@@ -10,6 +10,11 @@ export function suggestions(company) {
   const add = (kind, text, source_url, basis) => {
     if (text && source_url && !out.some((s) => s.text === text)) out.push({ kind, text, source_url, basis });
   };
+  // A business without a website: the map listing is the only source.
+  if ((company.site_status === 'none' || /\.no-website\.invalid$/.test(company.domain || '')) && company.profile_url) {
+    const what = String(company.description || company.industry || 'local businesses').replace(/\s*\(no website\)$/, '');
+    add('listing', `Found ${company.name} on the map while looking at ${what.toLowerCase()}, and couldn't find a website for you.`, company.profile_url, 'Map listing (no website)');
+  }
   for (const c of (facts.caseStudies || []).slice(0, 3)) {
     add('case_study', `I was looking through your work and the "${short(clean(c.text))}" project stood out.`, c.url, `Case study link: ${c.text}`);
   }

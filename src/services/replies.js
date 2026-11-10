@@ -64,6 +64,59 @@ function matchMessage({ inReplyTo, references, from }) {
   return null;
 }
 
+// ---------------------------------------------------------------- out of office
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+/**
+ * When is this person back? Reads dates like "11/9 - 11/15", "until November 15th", "back on Monday".
+ * Returns the last date mentioned (within 60 days of the message), or null.
+ */
+export function returnDate(text, received = new Date()) {
+  const t = String(text || '').toLowerCase();
+  const at = new Date(received);
+  const y0 = at.getUTCFullYear();
+  const cands = [];
+  const push = (y, m, d) => {
+    if (m < 0 || m > 11 || d < 1 || d > 31) return;
+    let dt = new Date(Date.UTC(y ?? y0, m, d));
+    if (y == null && dt < at - 30 * 86400_000) dt = new Date(Date.UTC(y0 + 1, m, d));
+    if (dt >= at - 86400_000 && dt <= at.getTime() + 60 * 86400_000) cands.push(dt);
+  };
+  const yr = (v) => (v ? (v.length === 2 ? 2000 + Number(v) : Number(v)) : null);
+  for (const m of t.matchAll(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/g)) push(yr(m[3]), Number(m[1]) - 1, Number(m[2]));
+  for (const m of t.matchAll(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?/g)) push(yr(m[3]), MONTHS.indexOf(m[1]), Number(m[2]));
+  for (const m of t.matchAll(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?:,?\s*(\d{4}))?/g)) push(yr(m[3]), MONTHS.indexOf(m[2]), Number(m[1]));
+  if (!cands.length) {
+    const w = t.match(/\b(?:back|return(?:ing)?|in the office|until|till)\s+(?:on\s+)?(?:next\s+)?(sun|mon|tue|wed|thu|fri|sat)[a-z]*/);
+    if (w) { const dt = new Date(at); do dt.setUTCDate(dt.getUTCDate() + 1); while (dt.getUTCDay() !== DAYS.indexOf(w[1])); cands.push(new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()))); }
+  }
+  return cands.length ? new Date(Math.max(...cands)) : null;
+}
+
+/**
+ * An out-of-office answer never cancels the follow-up: it waits until the day after they are back
+ * (or a week, when no date is given).
+ */
+export function applyOutOfOffice(replyId) {
+  const r = q.get('SELECT * FROM replies WHERE id = :id', { id: replyId });
+  if (!r?.company_id) return null;
+  const back = returnDate(`${r.subject}\n${r.snippet}`, r.received_at);
+  const after = new Date((back ? back.getTime() : new Date(r.received_at).getTime() + 6 * 86400_000) + 86400_000);
+  const iso = new Date(Date.UTC(after.getUTCFullYear(), after.getUTCMonth(), after.getUTCDate())).toISOString();
+  q.run('UPDATE replies SET ooo_until = :b WHERE id = :id', { b: back ? back.toISOString().slice(0, 10) : null, id: replyId });
+  const c = q.get('SELECT followup_after FROM companies WHERE id = :id', { id: r.company_id });
+  if (!c.followup_after || c.followup_after < iso) {
+    q.run('UPDATE companies SET followup_after = :a WHERE id = :id', { a: iso, id: r.company_id });
+    logActivity(r.company_id, 'out_of_office', { back: back ? back.toISOString().slice(0, 10) : 'no date given', followupFrom: iso.slice(0, 10) }, 'imap');
+  }
+  return iso;
+}
+
+/** Out-of-office replies received before this rule existed. */
+export function backfillOutOfOffice() {
+  for (const r of q.all("SELECT r.id FROM replies r JOIN companies c ON c.id = r.company_id WHERE r.classification = 'auto_reply' AND c.followup_after IS NULL AND r.ooo_until IS NULL")) applyOutOfOffice(r.id);
+}
+
 /** Process one inbound message (used by IMAP sync and by tests). */
 const SYSTEM_SENDER = /^(no-?reply|do-?not-?reply|donotreply|notifications?|notify|alerts?|news(letter)?|mailer|updates?|billing|security|accounts?|team|support|marketing|info|hello)@/i;
 
@@ -144,7 +197,8 @@ export function processInbound(msg) {
       cancelPending('Recipient opted out');
       break;
     case 'auto_reply':
-      break; // out-of-office: keep follow-up schedule
+      applyOutOfOffice(replyId); // out-of-office: the follow-up waits until they are back
+      break;
     default:
       q.run("UPDATE companies SET status = 'REPLIED', status_reason = :r, updated_at = :now WHERE id = :cid", { r: `Reply received (${classification})`, now, cid: companyId });
       cancelPending('Prospect replied');
@@ -160,6 +214,7 @@ export function processInbound(msg) {
 export async function syncMailbox() {
   if (!imap.isConfigured()) throw new Error('IMAP is not configured (Settings → Hostinger mailbox)');
   reclassifyUnmatched();
+  backfillOutOfOffice();
   const stats = { sentScanned: 0, sentRecipients: 0, inboxScanned: 0, replies: 0, bounces: 0, optOuts: 0, unmatched: 0 };
   const sent = await imap.fetchFolder('sent', Number(getSetting('imap_last_uid_sent') || 0));
   const ours = getSetting('sender_email').toLowerCase();
@@ -213,7 +268,10 @@ export function listReplies({ classification, handled, other } = {}) {
   if (classification) { where.push('r.classification = :cls'); p.cls = classification; }
   else if (other !== '1') where.push("r.classification != 'other'");
   if (handled !== undefined && handled !== '') { where.push('r.handled = :h'); p.h = Number(handled); }
-  return q.all(`SELECT r.*, c.name AS company_name, c.domain FROM replies r LEFT JOIN companies c ON c.id = r.company_id
+  return q.all(`SELECT r.*, c.name AS company_name, c.domain, c.followup_after,
+      m.id AS answer_id, m.status AS answer_status, m.body AS answer_body, m.send_after AS answer_at, m.sent_at AS answer_sent_at, m.status_reason AS answer_reason
+    FROM replies r LEFT JOIN companies c ON c.id = r.company_id
+    LEFT JOIN messages m ON m.id = (SELECT id FROM messages WHERE reply_ref = r.id AND status != 'cancelled' ORDER BY id DESC LIMIT 1)
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY r.received_at DESC LIMIT 300`, p);
 }
 

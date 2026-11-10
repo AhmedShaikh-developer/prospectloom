@@ -2,7 +2,7 @@
 // pre-send eligibility re-check, daily quota and spacing. Research never sends.
 import crypto from 'node:crypto';
 import { q, nowIso, today, logActivity } from '../db/index.js';
-import { getSetting, getNum, getBool } from '../lib/settings.js';
+import { getSetting, getNum, getBool, setSetting } from '../lib/settings.js';
 import { getCompany, reevaluate, complianceStatus } from './companies.js';
 import { runDedup } from './suppression.js';
 import { sendMail, isMailboxError, recordMailError, clearMailError, mailPause, friendlyMailError } from '../integrations/mailer.js';
@@ -15,6 +15,10 @@ import { suggestions } from '../lib/personalization.js';
 import * as ai from '../integrations/ai.js';
 import { offerKey } from '../lib/offers.js';
 import { platformOf } from './performance.js';
+import { scanWebsite } from '../lib/siteScan.js';
+import { auditSite, auditNoWebsite } from '../lib/audit.js';
+import { saveAudit } from './verification.js';
+import { isNoWebsiteDomain } from '../integrations/osm.js';
 
 export function render(template, vars) {
   return String(template).replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (_, k) => (vars[k] ?? '').toString());
@@ -48,6 +52,20 @@ function firstName(c) {
  *   <postal address>
  *   <opt-out line>
  */
+/** Their message, quoted under our answer the way mail apps do. */
+export function quoteOf(replyId) {
+  const r = replyId && q.get('SELECT from_email, snippet, received_at FROM replies WHERE id = :id', { id: replyId });
+  if (!r?.snippet) return '';
+  const when = new Date(r.received_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: getSetting('send_timezone') || undefined });
+  return `\n\nOn ${when}, ${r.from_email} wrote:\n${r.snippet.split('\n').map((l) => `> ${l}`).join('\n')}`;
+}
+
+/** Just the signature (title, company, website): used under answers to people who wrote back. */
+export function signature() {
+  const site = String(getSetting('sender_website') || '').trim().replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/+$/, '');
+  return [[getSetting('sender_title'), getSetting('sender_company')].filter(Boolean).join(', '), site].filter(Boolean).join('\n');
+}
+
 export function footer(token) {
   const site = String(getSetting('sender_website') || '').trim().replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/+$/, '');
   const signature = [
@@ -78,6 +96,9 @@ export function buildIntro(c) {
   };
 }
 
+/** Replies written by a person (out-of-office, bounces and unrelated mail are not). */
+export const REAL_REPLY = "('positive','neutral','negative','opt_out')";
+
 /** Full pre-send eligibility re-check (Phase 9 step 2). */
 export function checkEligibility(message) {
   const reasons = [];
@@ -86,18 +107,21 @@ export function checkEligibility(message) {
   runDedup(c0);
   const c = reevaluate(c0.id, 'pre-send');
   const ev = c.evaluation;
-  if (message.kind === 'intro') {
+  if (message.kind === 'reply') {
+    if ([STATUS.DO_NOT_CONTACT, STATUS.BOUNCED].includes(c.status)) reasons.push(`Company status is ${c.status}`);
+  } else if (message.kind === 'intro') {
     if (c.status !== STATUS.READY) reasons.push(`Company status is ${c.status}: ${c.status_reason}`);
     const prior = q.get("SELECT id FROM messages WHERE company_id = :cid AND kind = 'intro' AND status IN ('sent','bounced') AND id != :id", { cid: c.id, id: message.id });
     if (prior) reasons.push('An intro was already sent to this company');
   } else {
     if (![STATUS.SENT, STATUS.FOLLOW_UP].includes(c.status)) reasons.push(`Follow-up not allowed in status ${c.status}`);
-    const reply = q.get('SELECT id FROM replies WHERE company_id = :cid', { cid: c.id });
+    const reply = q.get(`SELECT id FROM replies WHERE company_id = :cid AND classification IN ${REAL_REPLY}`, { cid: c.id });
     if (reply) reasons.push('Company already replied — handle the conversation manually');
     const hard = (ev.conflicts || []).filter((x) => ['opt_out', 'complaint', 'bounce', 'do_not_contact'].includes(x.type));
     if (hard.length) reasons.push(hard.map((x) => x.detail).join('; '));
   }
   if (message.to_email !== c.contact_email && message.kind === 'intro') reasons.push('Recipient differs from the verified contact email');
+  if (message.kind === 'reply' && q.get("SELECT 1 FROM replies WHERE company_id = :cid AND classification = 'opt_out'", { cid: c.id })) reasons.push('They asked not to be contacted');
   const supp = q.get("SELECT reason FROM suppressions WHERE (kind='email' AND value=:e) OR (kind='domain' AND value=:d)", { e: message.to_email, d: emailDomain(message.to_email) });
   if (supp) reasons.push(`Recipient suppressed (${supp.reason})`);
   const comp = complianceStatus();
@@ -114,12 +138,12 @@ export function generateDrafts({ limit, companyIds } = {}) {
     WHERE c.status = 'READY'
       ${only.length ? `AND c.id IN (${only.join(',')})` : ''}
       AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.company_id = c.id AND m.kind = 'intro' AND m.status IN ('draft','approved','blocked','sent','bounced'))
-    ORDER BY c.fit_score DESC, c.ready_at ASC LIMIT :n`, { n: only.length ? only.length : n });
+    ORDER BY c.fit_score DESC, COALESCE(c.gap_score, 0) DESC, c.ready_at ASC LIMIT :n`, { n: only.length ? only.length : n });
   const created = [];
   for (const c of rows) {
     const { subject, body } = buildIntro(c);
     const token = crypto.randomBytes(12).toString('hex');
-    const res = q.run(`INSERT INTO messages (company_id, kind, to_email, subject, body, unsubscribe_token) VALUES (:cid, 'intro', :to, :subject, :body, :token)`, {
+    const res = q.run(`INSERT INTO messages (company_id, kind, to_email, subject, body, unsubscribe_token, writer) VALUES (:cid, 'intro', :to, :subject, :body, :token, 'template')`, {
       cid: c.id, to: c.contact_email, subject, body, token,
     });
     created.push(Number(res.lastInsertRowid));
@@ -137,16 +161,17 @@ export function generateFollowups() {
     SELECT m.*, c.status AS cstatus FROM messages m JOIN companies c ON c.id = m.company_id
     WHERE m.kind = 'intro' AND m.status = 'sent' AND c.status IN ('SENT','FOLLOW_UP')
       AND julianday('now') - julianday(m.sent_at) >= :days
-      AND NOT EXISTS (SELECT 1 FROM replies r WHERE r.company_id = c.id)
+      AND NOT EXISTS (SELECT 1 FROM replies r WHERE r.company_id = c.id AND r.classification IN ${REAL_REPLY})
+      AND (c.followup_after IS NULL OR c.followup_after <= :now)
       AND (SELECT COUNT(*) FROM messages f WHERE f.company_id = c.id AND f.kind = 'follow_up' AND f.status NOT IN ('cancelled','blocked','failed')) < :max
       AND NOT EXISTS (SELECT 1 FROM messages f WHERE f.company_id = c.id AND f.kind = 'follow_up' AND f.status IN ('draft','approved'))
       AND NOT EXISTS (SELECT 1 FROM messages f WHERE f.company_id = c.id AND f.kind = 'follow_up' AND f.status = 'sent' AND julianday('now') - julianday(f.sent_at) < :days)`,
-  { days, max });
+  { days, max, now: nowIso() });
   const ids = [];
   for (const m of rows) {
     const c = getCompany(m.company_id);
     const body = render(getSetting('template_followup_body'), { first_name: firstName(c), company: c.name, sender_name: getSetting('sender_name') });
-    const res = q.run(`INSERT INTO messages (company_id, kind, to_email, subject, body, in_reply_to, unsubscribe_token) VALUES (:cid, 'follow_up', :to, :subject, :body, :irt, :token)`, {
+    const res = q.run(`INSERT INTO messages (company_id, kind, to_email, subject, body, in_reply_to, unsubscribe_token, writer) VALUES (:cid, 'follow_up', :to, :subject, :body, :irt, :token, 'template')`, {
       cid: c.id, to: m.to_email, subject: m.subject.startsWith('Re:') ? m.subject : `Re: ${m.subject}`, body, irt: m.message_id, token: m.unsubscribe_token,
     });
     ids.push(Number(res.lastInsertRowid));
@@ -170,7 +195,7 @@ export function updateDraft(id, { subject, body, to_email }) {
   if (!m) throw new Error('Message not found');
   if (!['draft', 'approved', 'blocked'].includes(m.status)) throw new Error(`Cannot edit a ${m.status} message`);
   if (to_email && to_email !== m.to_email) throw new Error('Recipient cannot be changed here; update the verified contact on the company');
-  q.run("UPDATE messages SET subject = COALESCE(:subject, subject), body = COALESCE(:body, body), status = 'draft', approved_at = NULL WHERE id = :id", { subject, body, id });
+  q.run("UPDATE messages SET subject = COALESCE(:subject, subject), body = COALESCE(:body, body), status = 'draft', approved_at = NULL, writer = 'human', ai_error = NULL WHERE id = :id", { subject, body, id });
   logActivity(m.company_id, 'draft_edited', { messageId: id });
 }
 
@@ -200,7 +225,7 @@ export function cancelMessages(ids) {
 
 /** "Today" is the recipients' day (send timezone), not the server's — a US window can cross midnight in Pakistan. */
 export function sentToday(d = new Date()) {
-  return q.get("SELECT COUNT(*) AS n FROM messages WHERE status IN ('sent','bounced') AND sent_at >= :start", { start: zonedDayStart(d).toISOString() }).n;
+  return q.get("SELECT COUNT(*) AS n FROM messages WHERE status IN ('sent','bounced') AND kind != 'reply' AND sent_at >= :start", { start: zonedDayStart(d).toISOString() }).n;
 }
 
 // ---------------------------------------------------------------- warm-up: the daily limit grows by itself
@@ -365,8 +390,9 @@ export async function sendOne(id, { actor = 'user' } = {}) {
   const m = q.get('SELECT * FROM messages WHERE id = :id', { id });
   if (!m) throw new Error('Message not found');
   if (m.status !== 'approved') throw new Error(`Only approved messages can be sent (status: ${m.status})`);
+  const isReply = m.kind === 'reply';
   const quota = quotaStatus();
-  if (quota.remaining <= 0) return { ok: false, reason: `Daily limit reached (${quota.limit})` };
+  if (!isReply && quota.remaining <= 0) return { ok: false, reason: `Daily limit reached (${quota.limit})` };
   const el = checkEligibility(m);
   if (!el.ok) {
     q.run("UPDATE messages SET status = 'blocked', status_reason = :r WHERE id = :id", { r: el.reasons.join('; '), id });
@@ -374,22 +400,24 @@ export async function sendOne(id, { actor = 'user' } = {}) {
     return { ok: false, reason: el.reasons.join('; ') };
   }
   const from = `"${getSetting('sender_name')}" <${getSetting('sender_email')}>`;
-  const text = `${m.body}\n\n${footer(m.unsubscribe_token)}`;
+  const text = isReply ? `${m.body}\n\n${signature()}${quoteOf(m.reply_ref)}` : `${m.body}\n\n${footer(m.unsubscribe_token)}`;
   const domain = (getSetting('sender_email').split('@')[1]) || 'localhost';
   const messageId = `<${crypto.randomUUID()}@${domain}>`;
   try {
     const info = await sendMail({
       from, to: m.to_email, subject: m.subject, text, messageId,
-      inReplyTo: m.in_reply_to, references: m.in_reply_to,
-      listUnsubscribe: `<mailto:${getSetting('sender_email')}?subject=unsubscribe>`,
+      inReplyTo: m.in_reply_to, references: m.refs || m.in_reply_to,
+      listUnsubscribe: isReply ? undefined : `<mailto:${getSetting('sender_email')}?subject=unsubscribe>`,
     });
     if (info.rejected?.length) throw new Error(`Rejected by server: ${info.rejected.join(', ')}`);
     const now = nowIso();
     q.run("UPDATE messages SET status = 'sent', sent_at = :now, message_id = :mid WHERE id = :id", { now, mid: info.messageId, id });
-    const newStatus = m.kind === 'intro' ? STATUS.SENT : STATUS.FOLLOW_UP;
-    q.run('UPDATE companies SET status = :st, status_reason = :r, last_sent_date = :d, updated_at = :now WHERE id = :cid', {
-      st: newStatus, r: m.kind === 'intro' ? 'Intro sent' : 'Follow-up sent', d: today(), now, cid: m.company_id,
-    });
+    if (!isReply) {
+      const newStatus = m.kind === 'intro' ? STATUS.SENT : STATUS.FOLLOW_UP;
+      q.run('UPDATE companies SET status = :st, status_reason = :r, last_sent_date = :d, updated_at = :now WHERE id = :cid', {
+        st: newStatus, r: m.kind === 'intro' ? 'Intro sent' : 'Follow-up sent', d: today(), now, cid: m.company_id,
+      });
+    }
     logActivity(m.company_id, 'message_sent', { messageId: id, to: m.to_email, kind: m.kind }, actor);
     clearMailError();
     appendToSent(info.raw).catch(() => {});
@@ -429,7 +457,9 @@ export async function autoSendTick() {
   const last = q.get("SELECT MAX(sent_at) AS t FROM messages WHERE status IN ('sent','bounced')").t;
   const minGap = plan.spread ? (plan.behind > 1 ? catchUpMinutes(plan.sent) : 1) : gapMinutes(plan.sent);
   if (last && Date.now() - new Date(last).getTime() < minGap * 60000) return { skipped: 'spacing' };
-  const next = q.get("SELECT id FROM messages WHERE status = 'approved' ORDER BY kind = 'follow_up' DESC, approved_at ASC LIMIT 1");
+  const next = q.get(`SELECT m.id FROM messages m JOIN companies c ON c.id = m.company_id WHERE m.status = 'approved' AND m.kind != 'reply'
+    AND NOT (m.kind = 'follow_up' AND c.followup_after IS NOT NULL AND c.followup_after > :now)
+    ORDER BY m.kind = 'follow_up' DESC, m.approved_at ASC LIMIT 1`, { now: nowIso() });
   if (!next) return { skipped: 'nothing approved' };
   return sendOne(next.id, { actor: 'scheduler' });
 }
@@ -446,8 +476,9 @@ export function unsubscribeByToken(token) {
 
 // ---------------------------------------------------------------- Email studio (per-lead writing)
 
-/** Verified facts the writer (human or local AI) is allowed to use. */
-export function verifiedFacts(c) {
+/** Verified facts the writer (human or local AI) is allowed to use. With { tech: false } the raw list of
+ *  technologies is left out (the detailed email uses the audit's relevant tools instead). */
+export function verifiedFacts(c, { tech = true } = {}) {
   const f = [];
   f.push(`Company: ${c.name} (${c.domain})`);
   if (c.industry) f.push(`Industry: ${c.industry}`);
@@ -460,7 +491,7 @@ export function verifiedFacts(c) {
     const facts = JSON.parse(c.scan_facts || '{}');
     (facts.caseStudies || []).slice(0, 3).forEach((x) => f.push(`Case study on their site: ${x.text}`));
     (facts.hiring || []).slice(0, 2).forEach((x) => f.push(`They are hiring: ${x.text}`));
-    (facts.tech || []).filter((t) => t.name !== 'Google Analytics').forEach((t) => f.push(`Their website uses ${t.name}`));
+    if (tech) (facts.tech || []).filter((t) => t.name !== 'Google Analytics').forEach((t) => f.push(`Their website uses ${t.name}`));
   } catch { /* none */ }
   return f;
 }
@@ -472,6 +503,7 @@ export function studio(companyId) {
   const existing = q.get("SELECT id, status FROM messages WHERE company_id = :id AND kind = 'intro' AND status != 'cancelled' ORDER BY id DESC LIMIT 1", { id: companyId });
   return {
     suggestions: suggestions(c),
+    audit: parseAudit(c),
     angle: angleFor(c),
     facts: verifiedFacts(c),
     draft: intro,
@@ -496,20 +528,64 @@ export async function aiDraft(companyId, opts = {}) {
   });
 }
 
+const AUDIT_MAX_AGE = 30 * 86400_000;
+export const parseAudit = (c) => { try { return c?.audit ? JSON.parse(c.audit) : null; } catch { return null; } };
+
 /**
- * Write one email with AI and check it. A draft that sounds machine-written gets one rewrite with the
- * reasons as feedback. Returns { subject, body, problems } — problems is empty when it passed.
+ * The website audit the detailed email is written from. Re-reads the site when there is no audit yet
+ * or it is more than 30 days old, so the email describes the site as it is today.
+ */
+export async function ensureAudit(c, { refresh = false } = {}) {
+  let audit = parseAudit(c);
+  if (!refresh && audit && Date.now() - new Date(audit.at).getTime() < AUDIT_MAX_AGE) return audit;
+  if (c.site_status === 'none' || isNoWebsiteDomain(c.domain) || (c.site_status === 'no_web' && c.contact_email)) {
+    audit = auditNoWebsite(c, { email: c.contact_email || c.listing_email });
+    saveAudit(c.id, audit);
+    return audit;
+  }
+  if (['blocked', 'offline'].includes(c.site_status)) return audit;
+  try {
+    const s = await scanWebsite(c.website || c.domain);
+    if (!s.pages.length) return audit;
+    audit = auditSite(s.signals, c);
+    saveAudit(c.id, audit);
+  } catch { /* site unreachable right now: keep what we had */ }
+  return audit;
+}
+
+function detailedDraft(c, audit, feedback) {
+  const offer = offerKey(c.offer);
+  return ai.draftDetailedEmail({
+    company: c, audit, facts: verifiedFacts(c, { tech: false }), b2c: c.offer === 'C',
+    offerPitch: getSetting(`offer_${offer}_pitch`), senderName: getSetting('sender_name'), senderCompany: getSetting('sender_company'),
+    freeOffer: getSetting(audit.profile === 'agency' ? 'email_free_offer_agency' : 'email_free_offer'),
+    styleExample: getSetting('writing_style_example'), feedback, greetName: firstName(c),
+  });
+}
+
+/**
+ * Write one email with AI and check it. With a website audit (and email style "detailed") the email names
+ * what we saw on their site, what it usually costs them and what we would build; otherwise it is the short
+ * note from verified facts. A draft that fails the check gets one rewrite with the reasons as feedback.
+ * Returns { subject, body, problems, style, findings } — problems is empty when it passed.
  */
 export async function writeEmail(companyId) {
-  const c = getCompany(companyId);
-  let d = await aiDraft(companyId);
-  let problems = validateDraft(d, c);
+  if (!ai.isEnabled()) throw new Error('AI writing is off. Add your free Groq API key in Settings → AI writing.');
+  let c = getCompany(companyId);
+  if (!c) throw new Error('Company not found');
+  const audit = getSetting('email_style') === 'short' ? null : await ensureAudit(c);
+  c = getCompany(companyId);
+  const detailed = !!audit?.findings?.length;
+  const opts = { style: detailed ? 'detailed' : 'short', findings: detailed ? audit.findings.slice(0, 3) : [] };
+  const write = (feedback) => (detailed ? detailedDraft(c, audit, feedback) : aiDraft(companyId, { feedback }));
+  let d = await write();
+  let problems = validateDraft(d, c, opts);
   if (problems.length) {
-    const second = await aiDraft(companyId, { feedback: problems.join('; ') });
-    const p2 = validateDraft(second, c);
+    const second = await write(problems.join('; '));
+    const p2 = validateDraft(second, c, opts);
     if (p2.length <= problems.length) { d = second; problems = p2; }
   }
-  return { ...d, problems };
+  return { ...d, problems, style: opts.style, findings: opts.findings.map((f) => f.key) };
 }
 
 // Words and phrases that make an email read as AI- or template-written.
@@ -523,13 +599,17 @@ export function sharesPhrase(a, b, n = 7) {
   return false;
 }
 
-/** Automatic quality gate for AI-written emails sent without a human edit. Returns a list of problems. */
-export function validateDraft({ subject, body }, c = {}) {
+/**
+ * Automatic quality gate for AI-written emails sent without a human edit. Returns a list of problems.
+ * style "detailed" = the longer email built from the website audit (90–210 words, must name what was seen).
+ */
+export function validateDraft({ subject, body }, c = {}, { style = 'short', findings = [] } = {}) {
   const problems = [];
   const s = String(subject || '').trim(); const b = String(body || '').trim();
   const words = b.split(/\s+/).filter(Boolean).length;
+  const detailed = style === 'detailed';
   if (!s || s.length > 90) problems.push('subject missing or too long');
-  if (words < 35 || words > 180) problems.push(`body length ${words} words`);
+  if (detailed ? words < 75 || words > 210 : words < 35 || words > 180) problems.push(`body length ${words} words${detailed ? ' (write 110 to 170)' : ''}`);
   if (/\{\{|\}\}|\[[^\]]{1,40}\]|<[^>]+>/.test(s + b)) problems.push('placeholder or markup left in text');
   if (/https?:\/\/|www\./i.test(b)) problems.push('contains a link');
   if (/unsubscribe|opt[- ]out/i.test(b)) problems.push('contains its own opt-out line (added automatically)');
@@ -541,55 +621,88 @@ export function validateDraft({ subject, body }, c = {}) {
   if (/[\u2014\u2013;]/.test(b)) problems.push('dashes or semicolons');
   const offer = c.offer ? getSetting(`offer_${offerKey(c.offer)}_pitch`) : '';
   if (offer && sharesPhrase(b, offer, 7)) problems.push('copies the offer description word for word');
-  if (words > 130) problems.push('too long for a first email');
-  if (/\$\s?\d|\d+\s?%/.test(b) && !/\$\s?\d|\d+\s?%/.test(`${c.description || ''} ${c.personalization || ''}`)) problems.push('mentions a number/percentage not in the facts');
+  if (!detailed && words > 130) problems.push('too long for a first email');
+  const known = `${c.description || ''} ${c.personalization || ''} ${findings.map((f) => `${f.observed} ${f.why} ${f.fix}`).join(' ')}`;
+  if (/\$\s?\d|\d+\s?%/.test(b) && !/\$\s?\d|\d+\s?%/.test(known)) problems.push('mentions a number/percentage not in the facts');
+  // Every website named must be theirs, spelled exactly (no shortened or invented domains).
+  if (c.domain && !/\.no-website\.invalid$/.test(c.domain)) {
+    const named = `${s} ${b}`.toLowerCase().match(/\b[a-z0-9][a-z0-9-]*\.(com|net|org|io|co|us|biz|info|ai|app|dev|agency|studio|design)\b/g) || [];
+    const own = c.domain.toLowerCase().replace(/^www\./, '');
+    const seen = findings.map((f) => f.observed).join(' ').toLowerCase(); // e.g. "sends buyers to Realtor.com"
+    const wrong = named.filter((d) => d !== own && !own.endsWith(`.${d}`) && !d.endsWith(`.${own}`) && !seen.includes(d));
+    if (wrong.length) problems.push(`names a website that is not theirs (${[...new Set(wrong)].join(', ')})`);
+  }
+  if (detailed) {
+    const lc = b.toLowerCase();
+    if (findings.length && !findings.some((f) => (f.keywords || []).some((k) => k && lc.includes(String(k).toLowerCase())))) problems.push('does not say what was noticed on their site');
+    if (/\b(outdated|old-fashioned|poorly|terrible|ugly|broken|behind the times|struggling|miss(es|ing)? out)\b/i.test(b)) problems.push('judges their business');
+    if (/^\s*[-*•]\s|^\s*\d+[.)]\s/m.test(b)) problems.push('uses a list');
+  }
   const sender = String(getSetting('sender_name') || '').split(' ')[0];
   if (sender && !b.includes(sender)) problems.push('missing sign-off');
   return problems;
 }
 
+const AI_DOWN = /rate limit|reach Groq|rejected the API key|AI writing is off|Groq error 5/;
+const MAX_AI_TRIES = 3;
+
 /**
- * Autopilot: for today's free quota, create intros for READY companies, rewrite them with AI
- * (when a Groq key is set and the result passes the quality gate), and approve them. Every
- * message is still re-checked right before sending, and sending stays paced and within the limit.
+ * Autopilot: for today's free quota, create intros for READY companies, write each one with AI and approve it.
+ * With AI on, a template is never approved: an email the AI could not write yet (Groq unreachable, rate limit)
+ * stays a draft and is retried at the next hourly top-up; one that fails the quality check 3 times is left
+ * for you in Outreach. Every message is still re-checked right before sending, within the daily limit.
  */
 export async function runAutopilot({ actor = 'autopilot', onProgress } = {}) {
   const queued = q.get("SELECT COUNT(*) AS n FROM messages WHERE status = 'approved' AND kind = 'intro'").n;
   const room = Math.max(0, quotaStatus().remaining - queued);
-  const out = { drafted: 0, aiWritten: 0, aiRejected: 0, approved: 0, blocked: 0, followups: 0, notes: [] };
-  // Approve any drafts already waiting (e.g. written in Email studio), then fill the rest of today's room.
-  const waiting = q.all("SELECT id FROM messages WHERE status = 'draft' AND kind = 'intro' ORDER BY id LIMIT :n", { n: room }).map((r) => r.id);
+  const out = { drafted: 0, aiWritten: 0, aiRejected: 0, waitingForAi: 0, approved: 0, blocked: 0, followups: 0, notes: [] };
+  const aiOn = ai.isEnabled();
+  // Drafts already waiting (written in Email studio, or not yet written by AI), then fill the rest of today's room.
+  const waiting = q.all(`SELECT id, writer FROM messages WHERE status = 'draft' AND kind = 'intro' AND ai_attempts < ${MAX_AI_TRIES} ORDER BY id LIMIT :n`, { n: room });
   const fresh = room - waiting.length > 0 ? generateDrafts({ limit: room - waiting.length }).ids : [];
   out.drafted = fresh.length;
-  if (fresh.length && ai.isEnabled()) {
-    for (const [i, id] of fresh.entries()) {
-      onProgress?.(i, fresh.length, `Writing email ${i + 1} of ${fresh.length} with AI`);
-      const m = q.get('SELECT * FROM messages WHERE id = :id', { id });
-      const c = getCompany(m.company_id);
-      try {
-        const d = await writeEmail(c.id);
-        if (d.problems.length) { out.aiRejected++; out.notes.push(`${c.name}: AI draft rejected (${d.problems.join(', ')}) — template used`); continue; }
-        q.run('UPDATE messages SET subject = :subject, body = :body WHERE id = :id', { subject: d.subject, body: d.body, id });
-        out.aiWritten++;
-      } catch (e) {
-        out.notes.push(`${c.name}: AI unavailable (${e.message}) — template used`);
-        if (/rate limit|reach Groq|rejected the API key/.test(e.message)) break; // don't hammer the API
+  const toWrite = aiOn ? [...waiting.filter((w) => !['ai', 'human'].includes(w.writer)).map((w) => w.id), ...fresh] : [];
+  let down = null;
+  for (const [i, id] of toWrite.entries()) {
+    const m = q.get('SELECT * FROM messages WHERE id = :id', { id });
+    const c = getCompany(m.company_id);
+    if (down) { q.run('UPDATE messages SET ai_error = :e WHERE id = :id', { e: down, id }); out.waitingForAi++; continue; }
+    onProgress?.(i, toWrite.length, `Reading ${c.domain} and writing email ${i + 1} of ${toWrite.length}`);
+    try {
+      const d = await writeEmail(c.id);
+      if (d.problems.length) {
+        out.aiRejected++;
+        q.run('UPDATE messages SET ai_attempts = ai_attempts + 1, ai_error = :e WHERE id = :id', { e: `AI draft did not pass the check: ${d.problems.join(', ')}`, id });
+        out.notes.push(`${c.name}: AI draft rejected (${d.problems.join(', ')}) — kept as a draft, tried again later`);
+        continue;
       }
+      q.run("UPDATE messages SET subject = :subject, body = :body, writer = 'ai', ai_error = NULL WHERE id = :id", { subject: d.subject, body: d.body, id });
+      out.aiWritten++;
+    } catch (e) {
+      q.run('UPDATE messages SET ai_error = :e WHERE id = :id', { e: e.message, id });
+      out.waitingForAi++;
+      out.notes.push(`${c.name}: AI unavailable (${e.message}) — kept as a draft, tried again at the next hourly run`);
+      if (AI_DOWN.test(e.message)) down = e.message; // don't hammer the API
     }
-  } else if (fresh.length) out.notes.push('No Groq key — emails use your templates');
+  }
+  if (!aiOn && fresh.length) out.notes.push('No Groq key — emails use your templates');
+  // With AI on, only emails written by AI or by you can go out.
+  const ready = [...waiting.map((w) => w.id), ...fresh].filter((id) => !aiOn || ['ai', 'human'].includes(q.get('SELECT writer FROM messages WHERE id = :id', { id })?.writer));
   if (getBool('autopilot_review')) {
     // Review mode: autopilot finds, researches and writes; you approve each email before it can be sent.
-    out.held = waiting.length + fresh.length;
+    out.held = ready.length;
     if (getBool('followup_enabled')) out.followups = generateFollowups().ids.length;
     out.notes.push(`${out.held} email(s) waiting for your approval in Outreach`);
   } else {
-    const appr = approveMessages([...waiting, ...fresh]);
+    const appr = approveMessages(ready);
     out.approved = appr.approved.length; out.blocked = appr.blocked.length;
     if (getBool('followup_enabled')) {
       const fu = generateFollowups();
       out.followups = approveMessages(fu.ids).approved.length;
     }
   }
+  if (out.waitingForAi) setSetting('ai_last_error', JSON.stringify({ at: nowIso(), error: down || out.notes[out.notes.length - 1] }));
+  else if (out.aiWritten) setSetting('ai_last_error', '');
   logActivity(null, 'autopilot', out, actor);
   return out;
 }
@@ -608,8 +721,8 @@ export async function rewriteMessages(ids, { onProgress } = {}) {
     try {
       const d = await writeEmail(m.company_id);
       if (d.problems.length) { out.kept++; out.notes.push(`${c.name}: new draft still had problems (${d.problems.join(', ')}) — kept the current one`); continue; }
-      q.run('UPDATE messages SET subject = :subject, body = :body WHERE id = :id', { subject: d.subject, body: d.body, id });
-      logActivity(m.company_id, 'message_rewritten', { messageId: id }, 'user');
+      q.run("UPDATE messages SET subject = :subject, body = :body, writer = 'ai', ai_error = NULL WHERE id = :id", { subject: d.subject, body: d.body, id });
+      logActivity(m.company_id, 'message_rewritten', { messageId: id, style: d.style }, 'user');
       out.rewritten++;
     } catch (e) {
       out.notes.push(`${c?.name || id}: ${e.message}`);
@@ -632,7 +745,7 @@ export function createCustomDraft(companyId, { subject, body }) {
   if (/\{\{|\}\}/.test(subject + body)) throw new Error('Unfilled {{variables}} remain in the email');
   if (body.length > 2500) throw new Error('Email body is too long (max 2500 characters)');
   const token = crypto.randomBytes(12).toString('hex');
-  const res = q.run(`INSERT INTO messages (company_id, kind, to_email, subject, body, unsubscribe_token) VALUES (:cid, 'intro', :to, :subject, :body, :token)`, {
+  const res = q.run(`INSERT INTO messages (company_id, kind, to_email, subject, body, unsubscribe_token, writer) VALUES (:cid, 'intro', :to, :subject, :body, :token, 'human')`, {
     cid: c.id, to: c.contact_email, subject, body, token,
   });
   logActivity(c.id, 'draft_created', { messageId: Number(res.lastInsertRowid), custom: true });

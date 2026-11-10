@@ -2,7 +2,12 @@
 // source for B2C and local B2B leads. Nominatim finds the area, Overpass lists businesses
 // in it that publish their own website. Usage policies: identify the app, keep volume low.
 import { getSetting } from '../lib/settings.js';
-import { normalizeDomain, normalizeUrl } from '../lib/normalize.js';
+import { normalizeDomain, normalizeUrl, normalizeEmail } from '../lib/normalize.js';
+import { FREE_MAIL } from '../lib/audit.js';
+
+// Businesses without a website get a placeholder domain that can never resolve (RFC 2606 ".invalid").
+export const NO_WEBSITE_TLD = 'no-website.invalid';
+export const isNoWebsiteDomain = (d) => String(d || '').endsWith('.' + NO_WEBSITE_TLD);
 import { q, nowIso } from '../db/index.js';
 
 const UA = 'ProspectLoomLeadFinder/1.0 (personal lead research tool)';
@@ -87,7 +92,7 @@ function address(t) {
  * Find businesses of a category in an area that list their own website.
  * Returns { area, results: [{ name, website, domain, phone, address, osm_url, category, offer, email_hint }], skipped }
  */
-export async function findBusinesses({ categoryId, location, limit = 50, customTag }) {
+export async function findBusinesses({ categoryId, location, limit = 50, customTag, noWebsite = getSetting('engine_no_website') !== '0' }) {
   let cat = CATEGORIES.find((c) => c.id === categoryId);
   if (customTag) {
     const m = String(customTag).match(/^\s*([a-z_:]+)\s*=\s*([a-z0-9_;|]+)\s*$/i);
@@ -100,7 +105,9 @@ export async function findBusinesses({ categoryId, location, limit = 50, customT
   const bbox = `${area.south},${area.west},${area.north},${area.east}`;
   // Exact matches are much faster on the public servers than regex matches.
   const sel = cat.values.length === 1 ? `["${cat.key}"="${cat.values[0]}"]` : `["${cat.key}"~"^(${cat.values.join('|')})$"]`;
-  const query = `[out:json][timeout:80];(nwr${sel}["website"](${bbox});nwr${sel}["contact:website"](${bbox}););out tags center ${Math.min(800, limit * 4)};`;
+  // Businesses with their own website, plus (optionally) those that list an email but no website at all.
+  const noWeb = noWebsite ? `nwr${sel}["email"][!"website"][!"contact:website"](${bbox});nwr${sel}["contact:email"][!"website"][!"contact:website"](${bbox});` : '';
+  const query = `[out:json][timeout:80];(nwr${sel}["website"](${bbox});nwr${sel}["contact:website"](${bbox});${noWeb});out tags center ${Math.min(800, limit * 4)};`;
   // The public Overpass servers are free but sometimes busy: try each configured server in turn.
   let data; let lastErr;
   for (const url of getSetting('osm_overpass_url').split(',').map((x) => x.trim()).filter(Boolean)) {
@@ -111,23 +118,29 @@ export async function findBusinesses({ categoryId, location, limit = 50, customT
   }
   if (!data) throw lastErr;
   const seen = new Set(); const results = []; let skipped = 0;
+  let noSite = 0;
   for (const el of data.elements || []) {
     const t = el.tags || {};
     const website = normalizeUrl(t.website || t['contact:website'] || '');
     const domain = normalizeDomain(website);
-    if (!t.name || !domain) { skipped++; continue; }
-    if (isPlatform(domain)) { skipped++; continue; }
-    if (seen.has(domain)) continue;
-    seen.add(domain);
-    results.push({
-      name: t.name, website, domain,
-      phone: t.phone || t['contact:phone'] || '',
-      address: address(t),
-      osm_url: `https://www.openstreetmap.org/${el.type}/${el.id}`,
-      category: cat.label, offer: cat.offer,
-      email_hint: t.email || t['contact:email'] || '',
-    });
+    const email = normalizeEmail(String(t.email || t['contact:email'] || '').split(/[;,\s]/)[0]);
+    const base = { name: t.name, phone: t.phone || t['contact:phone'] || '', address: address(t), osm_url: `https://www.openstreetmap.org/${el.type}/${el.id}`, category: cat.label, offer: cat.offer, city: t['addr:city'] || '' };
+    if (!t.name) { skipped++; continue; }
+    // No website of its own (nothing listed, or only a Facebook/Instagram/booking page): usable only with a listed email.
+    if (!domain || isPlatform(domain)) {
+      if (!noWebsite || !email) { skipped++; continue; }
+      const own = FREE_MAIL.test(email) ? '' : normalizeDomain(email);
+      const key = own || `osm-${el.type}${el.id}.${NO_WEBSITE_TLD}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push({ ...base, website: '', domain: key, email, noWebsite: true, ownDomain: !!own, social_url: domain ? website : '' });
+      noSite++;
+    } else {
+      if (seen.has(domain)) continue;
+      seen.add(domain);
+      results.push({ ...base, website, domain, email_hint: email });
+    }
     if (results.length >= limit) break;
   }
-  return { area: area.name, capped: area.capped, results, skipped };
+  return { area: area.name, capped: area.capped, results, skipped, noWebsite: noSite };
 }

@@ -2,8 +2,8 @@
 // pasted domain lists, Apollo search and HubSpot. Dedups by normalized domain.
 import { parse } from 'csv-parse/sync';
 import { q, nowIso, logActivity, isPrimaryWorkspace } from '../db/index.js';
-import { upsertCompany } from './companies.js';
-import { normalizeDomain } from '../lib/normalize.js';
+import { upsertCompany, getByDomain, reevaluate } from './companies.js';
+import { normalizeDomain, normalizeEmail } from '../lib/normalize.js';
 
 // Header aliases -> internal field. Lower-cased, non-alphanumerics stripped.
 const ALIASES = {
@@ -160,11 +160,35 @@ export function handleClayWebhook(body) {
 /** Import businesses picked from the OpenStreetMap finder. Location carries the OSM page as its source. */
 export function importLocal(results) {
   const records = (results || []).map((r) => ({
-    name: r.name, website: r.website, domain: r.domain, industry: r.category, offer: r.offer,
+    name: r.name, website: r.website || undefined, domain: r.domain, industry: r.category, offer: r.offer,
     us_presence: r.address ? `Address: ${r.address}` : undefined, us_presence_url: r.address ? r.osm_url : undefined,
-    notes: [r.phone && `Phone: ${r.phone}`, `Found on OpenStreetMap: ${r.osm_url}`].filter(Boolean).join('\n'),
+    notes: [r.phone && `Phone: ${r.phone}`, r.noWebsite && (r.social_url ? `No website of its own (listing links to ${r.social_url})` : 'No website listed'), `Found on OpenStreetMap: ${r.osm_url}`].filter(Boolean).join('\n'),
   }));
-  return importRecords(records, { origin: 'openstreetmap', label: 'Local business finder' });
+  const res = importRecords(records, { origin: 'openstreetmap', label: 'Local business finder' });
+  // What the map listing itself publishes: the business email, and for businesses without a website,
+  // everything research needs (the listing is the source; no website to scan).
+  const now = nowIso();
+  for (const r of results || []) {
+    const c = getByDomain(normalizeDomain(r.domain));
+    if (!c) continue;
+    const email = normalizeEmail(r.email || r.email_hint || '');
+    const patch = {};
+    if (email && !c.listing_email) patch.listing_email = email;
+    if (r.noWebsite && res.createdIds.includes(c.id)) {
+      const city = r.city || '';
+      Object.assign(patch, {
+        site_status: r.ownDomain ? null : 'none', social_url: r.social_url || null, website: r.ownDomain ? c.website : null,
+        description: `${r.category.replace(/ies$/, 'y').replace(/s$/, '')}${city ? ` in ${city}` : ''} (no website)`, profile_url: r.osm_url,
+        contact_email: email, email_source_url: r.osm_url, email_evidence_type: 'map_listing', email_contact_type: 'general',
+        email_purpose: 'Business email published in its own map listing', email_source_confirmed: 1, email_checked_at: now, email_auto_selected: 1,
+      });
+    }
+    if (Object.keys(patch).length) {
+      q.run(`UPDATE companies SET ${Object.keys(patch).map((k) => `${k} = :${k}`).join(', ')} WHERE id = :id`, { ...patch, id: c.id });
+      if (patch.contact_email) reevaluate(c.id, 'import');
+    }
+  }
+  return { ...res, noWebsite: (results || []).filter((r) => r.noWebsite).length };
 }
 
 // ---------------------------------------------------------------- watched "leads csv" folder
@@ -173,7 +197,7 @@ import path from 'node:path';
 import { ROOT } from '../config.js';
 import { getSetting } from '../lib/settings.js';
 import { extractEmails } from '../lib/emailRules.js';
-import { normalizeEmail, emailDomain } from '../lib/normalize.js';
+import { emailDomain } from '../lib/normalize.js';
 
 export function leadsFolder() {
   if (!isPrimaryWorkspace()) throw new Error('The leads folder is on the server owner\'s computer — upload your CSV files in the “CSV files” tab instead.');

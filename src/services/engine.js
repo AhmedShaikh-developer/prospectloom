@@ -28,6 +28,7 @@ export function config() {
     apolloTitles: getSetting('engine_apollo_titles'),
     apolloWanted: getBool('engine_apollo_enabled'),
     apolloReady: apollo.isConfigured() && getBool('apollo_api_search_enabled'),
+    noWebsite: getSetting('engine_no_website') !== '0',
   };
 }
 
@@ -93,12 +94,16 @@ async function runOsm(t, ctx) {
   const r = await osm.findBusinesses({ categoryId: t.category, location: t.location, limit: 150 });
   const known = new Set(q.all(`SELECT domain FROM companies WHERE domain IN (${r.results.map((_, i) => ':d' + i).join(',') || "''"})`,
     Object.fromEntries(r.results.map((x, i) => ['d' + i, x.domain]))).map((x) => x.domain));
-  const candidates = r.results.filter((x) => !known.has(x.domain));
+  // Businesses without a website are known by their listed email instead of a domain.
+  const knownEmails = new Set(q.all(`SELECT contact_email AS e FROM companies WHERE contact_email IN (${r.results.filter((x) => x.email).map((_, i) => ':e' + i).join(',') || "''"})
+    UNION SELECT listing_email FROM companies WHERE listing_email IN (${r.results.filter((x) => x.email).map((_, i) => ':e' + i).join(',') || "''"})`,
+  Object.fromEntries(r.results.filter((x) => x.email).map((x, i) => ['e' + i, x.email]))).map((x) => x.e));
+  const candidates = r.results.filter((x) => !known.has(x.domain) && !(x.noWebsite && knownEmails.has(x.email)));
   // Map listings are often years old: skip businesses whose website domain no longer exists.
   if (candidates.length) ctx.progress(0, 1, `Checking ${candidates.length} websites still exist`);
   const { results: fresh, dead } = await dropDeadSites(candidates);
   const imp = fresh.length ? importLocal(fresh) : { created: 0 };
-  return { found: r.results.length, imported: imp.created, deadSites: dead, label: `${cat.label} in ${t.location}` };
+  return { found: r.results.length, imported: imp.created, noWebsite: imp.noWebsite || 0, deadSites: dead, label: `${cat.label} in ${t.location}` };
 }
 
 async function runApollo(t, ctx) {
@@ -126,7 +131,7 @@ export function runTarget(t) {
         next: apolloNext ? now : plusHours(rescanH),
       });
       if (t.source === 'apollo') noteSourceSuccess('apollo', r);
-      return { ...r, summary: `${r.label}: ${r.found} found, ${r.imported} new${r.deadSites ? `, ${r.deadSites} skipped (website no longer exists)` : ''}` };
+      return { ...r, summary: `${r.label}: ${r.found} found, ${r.imported} new${r.noWebsite ? ` (${r.noWebsite} without a website)` : ''}${r.deadSites ? `, ${r.deadSites} skipped (website no longer exists)` : ''}` };
     } catch (e) {
       if (t.source === 'apollo' && e.kind) { noteSourceError('apollo', e); throw e; } // out of credits / rate limit: wait, keep the cursor
       // Busy/timeout errors: retry in an hour. Bad location: retry much later.

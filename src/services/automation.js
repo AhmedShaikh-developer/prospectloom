@@ -11,6 +11,8 @@ import { mailPause } from '../integrations/mailer.js';
 import * as imap from '../integrations/imap.js';
 import { listSources } from './sources.js';
 import { runningJob } from './jobs.js';
+import * as responder from './responder.js';
+import * as ai from '../integrations/ai.js';
 
 const MIN = 60_000; const HOUR = 60 * MIN;
 const fmt = (v) => Number(v || 0).toLocaleString('en-US');
@@ -94,12 +96,17 @@ function writingRow(now) {
   const job = runningJob('autopilot');
   if (job) return { ...row, state: 'running', reason: job.message || "Writing today's emails." };
   if (!getBool('autopilot_enabled')) return { ...row, state: 'off', reason: 'Autopilot is off: you write and approve each email yourself in Outreach.', fix: { href: '#/', text: 'Turn on autopilot' } };
-  const approved = count("SELECT COUNT(*) AS n FROM messages WHERE status = 'approved'");
-  const held = count("SELECT COUNT(*) AS n FROM messages WHERE status = 'draft'");
+  const approved = count("SELECT COUNT(*) AS n FROM messages WHERE status = 'approved' AND kind != 'reply'");
+  const held = count("SELECT COUNT(*) AS n FROM messages WHERE status = 'draft' AND kind = 'intro' AND writer IN ('ai','human')");
+  const aiWait = count("SELECT COUNT(*) AS n FROM messages WHERE status = 'draft' AND kind = 'intro' AND ai_error IS NOT NULL AND (writer IS NULL OR writer = 'template')");
   const ready = count("SELECT COUNT(*) AS n FROM companies WHERE status = 'READY'");
   const { remaining } = quotaStatus(now);
   const next = { next: row.last ? later(row.last, 60) : iso(now), nextLabel: 'Next top-up' };
   if (getBool('autopilot_review') && held) return { ...row, ...next, state: 'attention', reason: `${plural(held, 'email')} written and waiting for your approval.`, fix: { href: '#/outreach', text: 'Approve them' } };
+  if (aiWait) {
+    const err = q.get("SELECT ai_error AS e FROM messages WHERE status = 'draft' AND kind = 'intro' AND ai_error IS NOT NULL ORDER BY id DESC LIMIT 1")?.e || '';
+    return { ...row, ...next, state: 'paused', reason: `${plural(aiWait, 'email')} waiting for the AI writer (${err.slice(0, 140)}). Template emails are never sent instead; it tries again every hour.`, fix: /API key/.test(err) ? { href: '#/settings?tab=ai', text: 'Check the Groq key' } : null };
+  }
   if (approved && approved >= remaining) return { ...row, ...next, state: 'done', reason: `${plural(approved, 'email')} written and approved, enough for the next sends. It checks every hour for more.` };
   if (!ready) return { ...row, ...next, state: 'waiting', reason: 'No lead is ready to email yet. Research finds more; this checks every hour.' };
   return { ...row, ...next, state: 'active', reason: `Writes one personal email per ready lead (${fmt(ready)} ready) and approves it, every hour.` };
@@ -133,6 +140,17 @@ function sendingRow(now) {
   const at = slot ? new Date(ds.getTime() + slot.atMin * MIN) : now;
   return { ...row, state: 'active', reason: `Sending at random, human-like times (${getNum('min_minutes_between_sends')}–${getNum('max_minutes_between_sends')} min apart, with breaks). ${plan.sent} of ${plan.limit} sent.`,
     next: iso(at > now ? at : now), nextLabel: 'Next email' };
+}
+
+function answersRow(now) {
+  const st = responder.status();
+  const row = { key: 'answers', label: 'Answering replies', href: '#/replies', last: st.lastSent || null };
+  if (st.mode === 'off') return { ...row, state: 'off', reason: 'Off: you answer every reply yourself.', fix: { href: '#/replies', text: 'Turn on' } };
+  if (!ai.isEnabled()) return { ...row, state: 'blocked', reason: 'Needs the Groq AI key to write answers.', fix: { href: '#/settings?tab=ai', text: 'Add the key' } };
+  if (st.review) return { ...row, state: 'attention', reason: `${plural(st.review, 'answer')} written and waiting for your approval.`, fix: { href: '#/replies', text: 'Review' } };
+  if (st.queued) return { ...row, state: 'active', reason: `${plural(st.queued, 'answer')} written and waiting for a natural moment to send (15 to 45 minutes after their message, 8 AM to 8 PM their time).`, next: st.next, nextLabel: 'Next answer' };
+  if (st.handoff) return { ...row, state: 'attention', reason: `${plural(st.handoff, 'reply', 'replies')} need you (a price, a meeting time or something the AI should not answer).`, fix: { href: '#/replies', text: 'Answer them' } };
+  return { ...row, state: 'waiting', reason: `${st.mode === 'review' ? 'Writes an answer for you to approve' : 'Answers'} anyone who writes back interested or with a question. Out-of-office and "not interested" replies are never answered.` };
 }
 
 function mailboxRow(now) {
@@ -205,6 +223,6 @@ function timeline(now, rows) {
 
 /** Everything the "Automation schedule" card shows. */
 export function automationStatus(now = new Date()) {
-  const rows = [engineRow(now), researchRow(now), writingRow(now), sendingRow(now), mailboxRow(now), ...sourceRows()];
+  const rows = [engineRow(now), researchRow(now), writingRow(now), sendingRow(now), mailboxRow(now), answersRow(now), ...sourceRows()];
   return { now: iso(now), timezone: reportTimezone(), sendTimezone: getSetting('send_timezone'), rows, timeline: timeline(now, rows) };
 }

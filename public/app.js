@@ -24,6 +24,11 @@ const since = (iso) => {
   return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
 };
 const day = (s) => (s ? String(s).slice(0, 10) : '—');
+// Businesses without a website get a placeholder domain (…no-website.invalid): show it as such.
+const noSite = (d) => /\.no-website\.invalid$/.test(String(d || ''));
+const domLabel = (c) => (noSite(c.domain) ? 'no website' : c.domain);
+const gapTags = (gaps, max = 3) => String(gaps || '').split(',').filter(Boolean).slice(0, max).map((g) => `<span class="tag gap">${esc(META.gapLabels?.[g] || g)}</span>`).join(' ');
+const parseJson = (v) => { try { return v ? JSON.parse(v) : null; } catch { return null; } };
 const badge = (v, label) => `<span class="badge b-${esc(v)}" data-testid="badge">${esc(label ?? META?.statuses?.[v] ?? v ?? '—')}</span>`;
 const link = (url, text) => (url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text || url)}</a>` : '<span class="muted">—</span>');
 const n = (v) => Number(v || 0).toLocaleString();
@@ -428,7 +433,7 @@ async function renderDashboard() {
       ${kpi('check', 'Ready to email', inv.eligibleUnsent, 'kpi-eligible', `${inv.reserveDays ?? 0} days at ${inv.dailyVolume}/day`)}
       ${kpi('search', 'Research-qualified', inv.researchQualified, 'kpi-qualified', `target ${n(inv.qualifiedTarget)}`, `<div class="bar"><span style="width:${Math.min(100, (inv.researchQualified / (inv.qualifiedTarget || 1)) * 100)}%"></span></div>`)}
       ${kpi('send', 'Sent today', dd.days[0].sent, 'kpi-sent', `yesterday <strong>${n(dd.days[1]?.sent)}</strong> · 7 days <strong>${n(dd.last7.sent)}</strong> · all time <strong>${n(dd.allTime.sent)}</strong>`)}
-      ${kpi('inbox', 'Replies today', dd.days[0].replies, 'kpi-replies', `7 days <strong>${n(dd.last7.replies)}</strong> · all time <strong>${n(dd.allTime.replies)}</strong> · ${ov.replyRate}% reply rate`)}
+      ${kpi('inbox', 'Replies today', dd.days[0].replies, 'kpi-replies', `7 days <strong>${n(dd.last7.replies)}</strong> · all time <strong>${n(dd.allTime.replies)}</strong> · ${ov.replyRate}% reply rate${dd.allTime.outOfOffice ? ` · <a href="#/replies" data-testid="kpi-ooo">${n(dd.allTime.outOfOffice)} out-of-office not counted</a>` : ''}`)}
     </div>
 
     <div class="dash mt">
@@ -547,6 +552,7 @@ async function renderEngine() {
           <div class="field"><label>Re-check each city after (days)</label><select name="engine_rescan_days">${nOptions([7, 14, 30, 60, 90], e.rescanDays)}</select></div>
           <div class="field"><label>Max new leads per day</label><select name="engine_daily_cap">${nOptions([200, 500, 1000, 1500, 3000, 5000], e.dailyCap)}</select></div>
         </div>
+        <label class="check" style="margin:4px 0 10px"><input type="checkbox" name="engine_no_website" data-testid="engine-no-website" ${e.noWebsite ? 'checked' : ''}> <span>Also add businesses <strong>without a website</strong> that publish an email in their map listing (they get a "you have no website" email with your website, CRM and POS offer). The free map data has few of these: roughly 1 for every 100 businesses with a website.</span></label>
         <p class="small-t muted" id="eng-est">${est(cats.size, e.locations.length)}</p>
         <p class="small-t muted">Uses the free OpenStreetMap servers politely (one search at a time). The app must be running; keep the Mac awake with <span class="code">caffeinate -i npm start</span>.</p>
       </div>
@@ -581,7 +587,7 @@ async function renderEngine() {
   $('#loc-clear').onclick = () => { $('#eng-locs').value = ''; engineDirty = true; refreshEst(); };
   const payload = () => {
     const f = formData(form);
-    return { ...f, engine_categories: $$('.eng-cat:checked').map((x) => x.value).join(','), engine_apollo_enabled: f.engine_apollo_enabled ? '1' : '0' };
+    return { ...f, engine_categories: $$('.eng-cat:checked').map((x) => x.value).join(','), engine_apollo_enabled: f.engine_apollo_enabled ? '1' : '0', engine_no_website: f.engine_no_website ? '1' : '0' };
   };
   form.onsubmit = async (ev) => {
     ev.preventDefault();
@@ -604,9 +610,10 @@ async function renderCompanies({ params }) {
     <div class="chips" data-testid="company-chips">${[
     ['All', {}], ['Not contacted yet', { contacted: 'no' }], ['Ready to email', { status: 'READY' }], ['Being researched', { status: 'RESEARCHING,HOLD_VERIFY' }],
     ['No email found', { hasEmail: 'no' }], ['Contacted', { contacted: 'yes' }], ['Replied', { status: 'REPLIED' }],
-  ].map(([label, f]) => { const active = ['status', 'contacted', 'hasEmail'].every((k) => (params[k] || '') === (f[k] || '')); return `<a class="chip ${active ? 'active' : ''}" href="#/companies?${new URLSearchParams(f)}">${label}</a>`; }).join('')}</div>
+  ].map(([label, f]) => { const active = ['status', 'contacted', 'hasEmail', 'gap'].every((k) => (params[k] || '') === (f[k] || '')); return `<a class="chip ${active ? 'active' : ''}" href="#/companies?${new URLSearchParams(f)}">${label}</a>`; }).join('')}</div>
+    <div class="chips gap-chips" data-testid="gap-chips"><span class="chips-label">Website gaps:</span>${(META.gapGroups || []).map((g) => { const f = { ...(params.status ? { status: params.status } : {}), ...(params.contacted ? { contacted: params.contacted } : {}), gap: g.key }; return `<a class="chip ${params.gap === g.key ? 'active' : ''}" data-testid="gap-${g.key}" href="#/companies?${new URLSearchParams(f)}">${esc(g.label)}</a>`; }).join('')}${params.gap ? `<a class="chip ghost" href="#/companies?${new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([k]) => k !== 'gap' && k !== 'limit')))}">✕ clear</a>` : ''}</div>
     <form class="filters" id="filters">
-      ${params.contacted ? `<input type="hidden" name="contacted" value="${esc(params.contacted)}">` : ''}${params.hasEmail ? `<input type="hidden" name="hasEmail" value="${esc(params.hasEmail)}">` : ''}
+      ${params.contacted ? `<input type="hidden" name="contacted" value="${esc(params.contacted)}">` : ''}${params.hasEmail ? `<input type="hidden" name="hasEmail" value="${esc(params.hasEmail)}">` : ''}${params.gap ? `<input type="hidden" name="gap" value="${esc(params.gap)}">` : ''}
       <input name="search" placeholder="Search name, domain, email, person…" value="${esc(params.search || '')}" data-testid="search">
       <select name="status" data-testid="filter-status"><option value="">All statuses</option>${statusOpts}</select>
       <select name="offer"><option value="">All offers</option>${['A', 'B', 'C'].map((o) => `<option value="${o}" ${params.offer === o ? 'selected' : ''}>Offer ${o}</option>`).join('')}</select>
@@ -618,8 +625,8 @@ async function renderCompanies({ params }) {
     <div class="table-wrap"><table data-testid="companies-table"><thead><tr><th style="width:36px"><input type="checkbox" id="sel-all"></th><th>Company</th><th>Status</th><th>Offer</th><th class="num">Fit</th><th>Contact</th><th>Decision-maker</th><th>Updated</th></tr></thead>
     <tbody>${rows.map((c) => `<tr data-testid="company-row" data-domain="${esc(c.domain)}">
       <td><input type="checkbox" class="sel" value="${c.id}"></td>
-      <td><a href="#/company/${c.id}" class="cell-title">${esc(c.name)}</a><div class="cell-sub">${esc(c.domain)}${c.platform ? ` · <span class="tag" title="${esc(c.lead_origin || '')}">${esc(c.platform)}</span>` : ''}</div></td>
-      <td>${badge(c.status)}<div class="cell-sub" style="max-width:280px;margin-top:3px">${esc((c.status_reason || '').slice(0, 110))}</div></td>
+      <td><a href="#/company/${c.id}" class="cell-title">${esc(c.name)}</a><div class="cell-sub">${esc(domLabel(c))}${c.platform ? ` · <span class="tag" title="${esc(c.lead_origin || '')}">${esc(c.platform)}</span>` : ''}</div></td>
+      <td>${badge(c.status)}<div class="cell-sub" style="max-width:280px;margin-top:3px">${esc((c.status_reason || '').slice(0, 110))}</div>${c.gaps ? `<div class="gap-row" data-testid="row-gaps">${gapTags(c.gaps)}</div>` : ''}</td>
       <td>${c.offer ? `<span class="tag">${esc(c.offer)}</span>` : '<span class="muted">—</span>'}</td><td class="num">${c.fit_score ?? '—'}</td>
       <td class="small-t">${esc(c.contact_email || '—')}</td>
       <td class="small-t">${esc(c.dm_name || '—')}${c.dm_title ? `<div class="cell-sub">${esc(c.dm_title)}</div>` : ''}</td>
@@ -704,6 +711,21 @@ function signalsHtml(c) {
   </div>${facts.tech?.length ? `<div class="small-t muted" style="margin-top:6px">Tech detected: ${facts.tech.map((t) => `<span class="tag">${esc(t.name)}</span>`).join(' ')}</div>` : ''}`;
 }
 
+function auditCard(c, audit) {
+  const LABEL = { booking: 'online booking', fieldservice: 'job scheduling', hotelbooking: 'booking engine', reservations: 'reservations', ordering: 'online ordering', pos: 'POS', crm: 'CRM', email: 'email marketing', chat: 'website chat', idx: 'listing search', portal: 'client portal', payments: 'payments', ecommerce: 'online shop', builder: 'website builder', forms: 'forms', app: 'app' };
+  const uses = Object.entries(audit?.has || {}).map(([k, v]) => `<span class="tag" title="${esc(LABEL[k] || k)}">${esc(v.join(', '))} · ${esc(LABEL[k] || k)}</span>`).join(' ');
+  const partner = audit?.profile === 'agency';
+  const body = !audit
+    ? `<p class="muted small-t">Not checked yet. Research reads their website and lists what is missing (online booking, ordering, forms, a CRM…). The email is written from it.</p>`
+    : audit.findings.length
+      ? `<ol class="findings" data-testid="findings">${audit.findings.map((f) => `<li data-testid="finding" data-key="${esc(f.key)}"><div class="f-obs">${esc(f.observed)}</div>
+          ${f.why ? `<div class="cell-sub"><strong>Why it matters:</strong> ${esc(f.why)}</div>` : ''}<div class="cell-sub"><strong>${partner ? 'Where we fit' : 'What we would build'}:</strong> ${esc(f.fix)}</div>${f.evidence ? `<div class="cell-sub">Seen on ${link(f.evidence)}</div>` : ''}</li>`).join('')}</ol>`
+      : '<p class="muted small-t" data-testid="no-findings">No clear gaps found on their site. Their email will be the short version, and leads with clear gaps are emailed first.</p>';
+  return `<div class="card" data-testid="audit-card"><div class="card-head"><h2>${ic('search')}${partner ? 'Partner fit' : audit?.noWebsite ? 'No website' : 'Website audit'}</h2><span class="hint">${audit ? `checked ${fmtDate(audit.at)}${audit.pages ? ` · ${audit.pages} pages read` : ''}` : ''}</span></div>
+    ${body}${uses ? `<div class="small-t muted" style="margin-top:10px">Already uses: ${uses}</div>` : ''}
+    <div class="row mt">${noSite(c.domain) || c.site_status === 'none' ? '' : `<button type="button" class="small" id="audit-refresh" data-testid="audit-refresh">${ic('sync')}Re-check website</button>`}<span class="small-t muted">The first email names the top finding, what it usually costs them and what we would build.</span></div></div>`;
+}
+
 async function renderCompany({ id }) {
   const [d, st] = await Promise.all([GET('/companies/' + id), GET(`/companies/${id}/studio`)]);
   const c = d.company; const ev = d.evaluation;
@@ -717,7 +739,7 @@ async function renderCompany({ id }) {
 
   app.innerHTML = `
     ${head(`<span data-testid="company-name">${esc(c.name)}</span>`,
-    `${link(c.website, c.domain)} · origin ${esc(c.lead_origin || '—')} · added ${day(c.created_at)} · screened ${c.screen_count}× (last ${fmtDate(c.last_screened_at)})`,
+    `${noSite(c.domain) || c.site_status === 'none' ? `<span class="tag gap">no website</span>${c.social_url ? ` (${link(c.social_url)})` : ''}` : link(c.website, c.domain)} · origin ${esc(c.lead_origin || '—')} · added ${day(c.created_at)} · screened ${c.screen_count}× (last ${fmtDate(c.last_screened_at)})`,
     `${badge(c.status)}${canDraftTemplate ? `<button id="draft" data-testid="draft-intro">${ic('mail')}Draft intro email</button>` : ''}<button id="dnc" class="danger" data-testid="mark-dnc">Do not contact</button><button class="primary" id="verify" data-testid="verify">${ic('play')}Run automated checks</button>`,
     `<a href="#/companies" class="crumb">${ic('back')} Companies</a>`)}
     <div class="alert ${ev.status === 'READY' ? '' : 'sev-high'}" data-testid="status-reason">${ic(ev.status === 'READY' ? 'check' : 'alert')}<div class="grow"><strong>Decision:</strong> ${badge(ev.status)} ${esc(ev.reason)}
@@ -758,6 +780,7 @@ async function renderCompany({ id }) {
       </form>
 
       <div class="stack">
+        ${auditCard(c, parseJson(c.audit))}
         <div class="card" data-testid="checklist"><div class="card-head"><h2>Readiness checklist</h2><span class="hint">${done}/${totalChecks}</span></div>
           <div class="bar ${done === totalChecks ? 'ok' : ''}"><span style="width:${(done / totalChecks) * 100}%"></span></div>
           <h3>Research facts</h3><ul class="checklist">${ev.research.map(checkLi).join('')}</ul>
@@ -799,6 +822,7 @@ async function renderCompany({ id }) {
     if (r) route();
   };
   $('#verify').onclick = (e) => act(e.currentTarget, () => POST(`/companies/${id}/verify`), (r) => `Checks done: ${r.log.length} steps → ${META.statuses[r.after]}`).then((r) => r && route());
+  if ($('#audit-refresh')) $('#audit-refresh').onclick = (e) => act(e.currentTarget, () => POST(`/companies/${id}/audit`), (r) => `Website re-checked: ${r.findings.length} finding${r.findings.length === 1 ? '' : 's'}`).then((r) => r && route());
   if ($('#draft')) $('#draft').onclick = (e) => act(e.currentTarget, () => POST('/outreach/drafts', { companyIds: [Number(id)] }), (r) => (r.created ? 'Draft created — review it in Outreach' : 'No draft created')).then((r) => r && route());
   $('#dnc').onclick = (e) => {
     const reason = prompt('Reason for do-not-contact?', 'Requested no contact');
@@ -816,6 +840,7 @@ async function renderCompany({ id }) {
     $('#studio-subject').value = r.subject;
     $('#studio-body').value = r.body;
     if (r.problems?.length) toast(`Check before saving — ${r.problems.join('; ')}`, true);
+    else if (r.style === 'detailed') toast(`Written from the website audit (${r.findings.length} finding${r.findings.length === 1 ? '' : 's'}) — read it before saving`);
   });
   $('#studio-save').onclick = (e) => act(e.currentTarget, () => POST(`/companies/${id}/custom-draft`, { subject: $('#studio-subject').value, body: $('#studio-body').value }), 'Draft saved — approve it in Outreach').then((r) => r && route());
 }
@@ -859,10 +884,11 @@ async function renderImport({ params }) {
         }
         const r = j.result; const found = r.results;
         const fresh = found.filter((x) => !x.known).length;
-        res.innerHTML = `<div class="row spread mt"><div><strong data-testid="finder-count">${found.length} business${found.length === 1 ? '' : 'es'} with a website</strong> <span class="muted small-t">· ${esc(p.location || '')} · ${r.skipped} skipped without their own website · searched ${fmtDate(j.finished_at)}${r.capped ? ' · central area of a large city' : ''}</span></div></div>
+        const web = found.filter((x) => !x.noWebsite).length; const noWeb = found.length - web;
+        res.innerHTML = `<div class="row spread mt"><div><strong data-testid="finder-count">${web} business${web === 1 ? '' : 'es'} with a website</strong>${noWeb ? ` <strong data-testid="finder-noweb">· ${noWeb} without a website (email from their listing)</strong>` : ''} <span class="muted small-t">· ${esc(p.location || '')} · ${r.skipped} skipped without their own website · searched ${fmtDate(j.finished_at)}${r.capped ? ' · central area of a large city' : ''}</span></div></div>
           ${found.length ? `<div class="table-wrap mt"><table data-testid="finder-results"><thead><tr><th style="width:36px"><input type="checkbox" id="fx-all" ${fresh ? 'checked' : ''} aria-label="Select all"></th><th>Business</th><th>Address</th><th>Phone</th><th></th></tr></thead><tbody>
           ${found.map((x, i) => `<tr data-testid="finder-row"><td><input type="checkbox" class="fx-sel" value="${i}" ${x.known ? 'disabled' : 'checked'} aria-label="Select ${esc(x.name)}"></td>
-            <td><div class="cell-title">${esc(x.name)}</div><div class="cell-sub">${link(x.website, x.domain)} · ${esc(x.category)}</div></td>
+            <td><div class="cell-title">${esc(x.name)}</div><div class="cell-sub">${x.noWebsite ? `<span class="tag gap">no website</span> ${esc(x.email || '')}` : link(x.website, x.domain)} · ${esc(x.category)}</div></td>
             <td class="small-t">${esc(x.address || '—')}</td><td class="small-t">${esc(x.phone || '—')}</td>
             <td class="num">${x.known ? '<span class="tag">already in list</span>' : `<a href="${esc(x.osm_url)}" target="_blank" rel="noopener" class="small-t">map</a>`}</td></tr>`).join('')}</tbody></table></div>
           <div class="row spread mt"><label class="check"><input type="checkbox" id="fx-research" checked> <span>Research them right away (scan website, find published email)</span></label>
@@ -1025,13 +1051,15 @@ async function renderResearch() {
 // ---------------------------------------------------------------- outreach (Phase 9)
 let AI_ON = false;
 async function renderOutreach() {
-  const [quota, msgs, d, sent] = await Promise.all([GET('/outreach/quota'), GET('/outreach/messages?status=draft,approved,blocked'), GET('/dashboard'), GET('/outreach/messages?status=sent,bounced,failed,cancelled')]);
+  const [quota, all, d, sent] = await Promise.all([GET('/outreach/quota'), GET('/outreach/messages?status=draft,approved,blocked'), GET('/dashboard'), GET('/outreach/messages?status=sent,bounced,failed,cancelled')]);
+  const msgs = all.filter((m) => m.kind !== 'reply'); // answers to replies are on the Replies page
+  const WRITER = { ai: ['info', 'Written by AI'], human: ['ok', 'Written by you'], template: ['', 'Template'] };
   AI_ON = !!d.integrations.ai.configured;
   const row = (m) => `<tr data-testid="msg-row" data-status="${m.status}" data-id="${m.id}">
     <td><input type="checkbox" class="msel" value="${m.id}"></td>
-    <td style="min-width:200px"><a href="#/company/${m.company_id}" class="cell-title">${esc(m.company_name)}</a><div class="cell-sub">${esc(m.to_email)}</div><div class="cell-sub">${esc(m.kind)} · fit ${m.fit_score ?? '—'}</div></td>
+    <td style="min-width:200px"><a href="#/company/${m.company_id}" class="cell-title">${esc(m.company_name)}</a><div class="cell-sub">${esc(m.to_email)}</div><div class="cell-sub">${esc(m.kind)} · fit ${m.fit_score ?? '—'}</div>${m.writer && WRITER[m.writer] ? `<div style="margin-top:4px" data-testid="writer">${badge(...WRITER[m.writer])}</div>` : ''}</td>
     <td><div class="cell-title" style="margin-bottom:6px">${esc(m.subject)}</div><div class="msg-body clamp" data-testid="msg-body">${esc(m.body)}</div>
-      <button type="button" class="linkish small-t toggle-full" data-testid="toggle-full">Show full email ▾</button>${m.status_reason ? `<div class="small-t" style="color:var(--bad);margin-top:4px">${esc(m.status_reason)}</div>` : ''}</td>
+      <button type="button" class="linkish small-t toggle-full" data-testid="toggle-full">Show full email ▾</button>${m.status_reason ? `<div class="small-t" style="color:var(--bad);margin-top:4px">${esc(m.status_reason)}</div>` : ''}${m.ai_error && m.status === 'draft' ? `<div class="small-t" style="color:var(--warn);margin-top:4px" data-testid="ai-wait">${m.ai_attempts >= 3 ? 'The AI could not write a good version of this email after 3 tries. Edit it yourself, or cancel it.' : `Waiting for the AI writer, tried again every hour (${esc(m.ai_error.slice(0, 160))}). This template is never sent as it is.`}</div>` : ''}</td>
     <td>${badge(m.status)}</td>
     <td class="num"><div class="grid" style="gap:6px"><button class="small edit" data-id="${m.id}" data-testid="preview">Preview / edit</button>${m.kind === 'intro' && AI_ON ? `<button class="small rewrite" data-id="${m.id}" data-testid="rewrite">${ic('sparkle')}Rewrite</button>` : ''}${m.status === 'approved' ? `<button class="small primary send" data-id="${m.id}" data-testid="send-now">${ic('send')}Send now</button>` : ''}</div></td></tr>`;
   app.innerHTML = `
@@ -1091,16 +1119,47 @@ async function renderOutreach() {
 }
 
 // ---------------------------------------------------------------- replies & pipeline (Phase 10)
+function answerHtml(r) {
+  if (r.classification === 'auto_reply') {
+    return r.company_id ? `<div class="answer" data-testid="ooo" data-state="ooo">${ic('clock')}<div><strong>Out of office${r.ooo_until ? ` until ${esc(day(r.ooo_until))}` : ''}.</strong> Not answered (nobody reads it, and answering auto-replies can start a loop).${r.followup_after ? ` The follow-up waits until <strong>${esc(day(r.followup_after))}</strong>.` : ''} Not counted as a reply.</div></div>` : '';
+  }
+  if (!r.company_id || !['positive', 'neutral'].includes(r.classification)) {
+    if (['negative', 'opt_out'].includes(r.classification) && r.company_id) return `<div class="answer muted" data-state="none">${ic('check')}<div>No answer is sent to ${r.classification === 'opt_out' ? 'an opt-out (they are suppressed)' : '"not interested"'}. Follow-ups are cancelled.</div></div>`;
+    return '';
+  }
+  const btns = (id, sendLabel) => `<div class="row" style="gap:6px;margin-top:8px"><button class="small primary ans-send" data-id="${id}" data-testid="answer-send">${ic('send')}${sendLabel}</button><button class="small ans-edit" data-id="${id}" data-testid="answer-edit">Edit</button><button class="small ghost ans-cancel" data-id="${id}" data-testid="answer-cancel">Don't send, I'll answer</button></div>`;
+  if (r.answer_id) {
+    const body = `<div class="msg-body clamp" data-testid="answer-body">${esc(r.answer_body)}</div><button type="button" class="linkish small-t toggle-full">Show full answer ▾</button>`;
+    if (r.answer_status === 'sent') return `<div class="answer" data-testid="answer" data-state="sent"><div class="answer-h">${badge('ok', 'Answered')}<span class="small-t muted">sent ${fmtDate(r.answer_sent_at)}${r.classification === 'positive' ? ' · they are interested, so it stays on your list' : ''}</span></div>${body}</div>`;
+    if (r.answer_status === 'approved') return `<div class="answer" data-testid="answer" data-state="queued"><div class="answer-h">${badge('info', 'Answer ready')}<span class="small-t muted">goes out ${fmtDate(r.answer_at)} (${esc(relTime(r.answer_at))}), a natural pause after their message</span></div>${body}${btns(r.answer_id, 'Send now')}</div>`;
+    if (r.answer_status === 'draft') return `<div class="answer" data-testid="answer" data-state="review"><div class="answer-h">${badge('warn', 'Answer waiting for you')}<span class="small-t muted">written by AI, sent when you approve it</span></div>${body}${btns(r.answer_id, 'Approve & send')}</div>`;
+    return `<div class="answer" data-testid="answer" data-state="${esc(r.answer_status)}"><div class="answer-h">${badge('bad', `Answer ${r.answer_status}`)}<span class="small-t muted">${esc(r.answer_reason || '')}</span></div>${body}</div>`;
+  }
+  if (['handoff', 'skipped'].includes(r.answer_state)) return `<div class="answer" data-testid="answer" data-state="handoff"><div class="answer-h">${badge('warn', 'Needs you')}<span class="small-t">${esc(r.answer_note || '')}</span></div><div class="row" style="gap:6px;margin-top:8px"><button class="small write-answer" data-id="${r.id}" data-testid="write-answer">${ic('sparkle')}Write an answer with AI anyway</button></div></div>`;
+  return `<div class="answer" data-testid="answer" data-state="pending"><div class="answer-h">${badge('', 'Not answered yet')}<span class="small-t muted">${AI_ON ? 'the answer is written within a minute' : 'add the Groq key to have answers written'}</span></div><div class="row" style="gap:6px;margin-top:8px"><button class="small write-answer" data-id="${r.id}" data-testid="write-answer">${ic('sparkle')}Write the answer now</button></div></div>`;
+}
+
 async function renderReplies({ params }) {
-  const [list, opps, d] = await Promise.all([GET('/replies?' + new URLSearchParams(params)), GET('/opportunities'), GET('/dashboard')]);
+  const [list, opps, d, settings, ans] = await Promise.all([GET('/replies?' + new URLSearchParams(params)), GET('/opportunities'), GET('/dashboard'), GET('/settings'), GET('/answers/status')]);
+  AI_ON = !!d.integrations.ai.configured;
   const clsOpts = (cur) => ['positive', 'neutral', 'negative', 'opt_out', 'bounce', 'auto_reply', 'other'].map((k) => `<option ${k === cur ? 'selected' : ''}>${k}</option>`).join('');
   const others = params.other === '1' ? null : (await GET('/replies?classification=other')).length;
+  const modes = META.answerModes || { auto: 'Answer automatically', review: 'Write the answer, I approve it', off: 'Off' };
   app.innerHTML = `
     ${head('Replies &amp; pipeline', 'Replies, bounces and opt-outs are read from your Hostinger inbox. Opt-outs and bounces are suppressed automatically.',
     `<button class="primary" id="sync" data-testid="sync-mailbox">${ic('sync')}Sync mailbox now</button>`)}
+    <form class="card" id="ans-form" data-testid="answer-settings"><div class="card-head"><h2>${ic('sparkle')}Answering replies</h2><span class="hint" data-testid="answer-status">${n(ans.sent)} answered · ${n(ans.queued)} ready to send · ${n(ans.review)} waiting for you · ${n(ans.handoff)} need you</span></div>
+      <p class="sub" style="margin:-6px 0 12px">When someone writes back <strong>interested or with a question</strong>, the AI writes an answer from the conversation and what research found about them. It goes out in the same thread 15 to 45 minutes later (8 AM to 8 PM their time), so it reads like you answered. Questions about price, contracts or an exact meeting time, complaints and anything unclear are left for you, and so is everything after 2 automatic answers. Out-of-office, "not interested" and opt-outs are never answered.</p>
+      ${ans.aiEnabled ? '' : `<div class="alert sev-high">${ic('alert')}<div class="grow">Answers need the free Groq AI key.</div><a href="#/settings?tab=ai">Add it →</a></div>`}
+      <div class="grid g3">
+        <div class="field"><label for="f-auto_reply_mode">Answers</label><select id="f-auto_reply_mode" name="auto_reply_mode" data-testid="f-auto_reply_mode">${Object.entries(modes).map(([k, v]) => `<option value="${k}" ${settings.auto_reply_mode === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></div>
+        <div class="field"><label for="f-booking_link">Your booking link (optional: Calendly, Cal.com…)</label><input id="f-booking_link" name="booking_link" value="${esc(settings.booking_link || '')}" placeholder="https://calendly.com/you/15min" data-testid="f-booking_link"></div>
+        <div class="field"><label for="f-auto_reply_max">Automatic answers per conversation, then it's yours</label><select id="f-auto_reply_max" name="auto_reply_max">${[1, 2, 3].map((x) => `<option ${String(x) === String(settings.auto_reply_max) ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+      </div>
+      <div class="row" style="justify-content:flex-end"><button class="primary" data-testid="save-answers">${ic('check')}Save</button></div></form>
     <div class="card"><div class="card-head"><h2>Inbox</h2><span class="hint">${list.length} message(s)${others ? ` · <a href="#/replies?other=1" data-testid="show-other">${others} other mail not related to your outreach (welcome emails, codes, newsletters) — show</a>` : params.other === '1' ? ' · <a href="#/replies">hide other mail</a>' : ''}</span></div><div class="table-wrap"><table data-testid="replies-table"><thead><tr><th>From</th><th>Message</th><th>Class</th><th>Done</th><th></th></tr></thead>
-      <tbody>${list.map((r) => `<tr data-testid="reply-row" data-class="${r.classification}"><td style="min-width:180px">${r.company_id ? `<a href="#/company/${r.company_id}" class="cell-title">${esc(r.company_name)}</a>` : '<span class="muted">Unmatched</span>'}<div class="cell-sub">${esc(r.from_email)}</div><div class="cell-sub">${fmtDate(r.received_at)}</div></td>
-        <td><div class="cell-title" style="margin-bottom:6px">${esc(r.subject)}</div><div class="msg-body">${esc(r.snippet)}</div></td>
+      <tbody>${list.map((r) => `<tr data-testid="reply-row" data-class="${r.classification}" data-id="${r.id}"><td style="min-width:180px">${r.company_id ? `<a href="#/company/${r.company_id}" class="cell-title">${esc(r.company_name)}</a>` : '<span class="muted">Unmatched</span>'}<div class="cell-sub">${esc(r.from_email)}</div><div class="cell-sub">${fmtDate(r.received_at)}</div></td>
+        <td><div class="cell-title" style="margin-bottom:6px">${esc(r.subject)}</div><div class="msg-body">${esc(r.snippet)}</div>${answerHtml(r)}</td>
         <td>${badge(r.classification)}<select class="small-t recls" data-id="${r.id}" style="margin-top:6px;width:auto">${clsOpts(r.classification)}</select></td>
         <td><input type="checkbox" class="handled" data-id="${r.id}" ${r.handled ? 'checked' : ''}></td>
         <td class="num"><button class="small suggest" data-id="${r.id}">Suggested reply</button></td></tr>`).join('') || `<tr><td colspan="5">${empty('No replies yet', ' — they appear here after each mailbox sync.')}</td></tr>`}</tbody></table></div></div>
@@ -1111,6 +1170,20 @@ async function renderReplies({ params }) {
           <select class="opp-stage" data-id="${o.id}">${META.pipelineStages.map(([s, l]) => `<option value="${s}" ${s === o.stage ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
           <input class="opp-value" data-id="${o.id}" placeholder="Value $" value="${o.value ?? ''}"></div>`).join('')}</div>`; }).join('')}</div></div>`;
   $('#sync').onclick = (e) => act(e.currentTarget, () => POST('/mailbox/sync'), (r) => `Synced: ${r.replies} replies, ${r.bounces} bounces, ${r.optOuts} opt-outs`).then((r) => r && route());
+  $('#ans-form').onsubmit = (e) => { e.preventDefault(); act(e.submitter, () => PUT('/settings', formData(e.target)), 'Saved').then((r) => r && route()); };
+  $$('.toggle-full').forEach((b) => { b.onclick = () => { const box = b.previousElementSibling; const open = box.classList.toggle('clamp'); b.textContent = open ? 'Show full answer ▾' : 'Show less ▴'; }; });
+  $$('.write-answer').forEach((b) => { b.onclick = (e) => act(e.currentTarget, () => POST(`/replies/${b.dataset.id}/answer`), (r) => (r.handoff ? `Left for you: ${r.handoff}` : r.auto ? `Answer written — goes out ${fmtDate(r.sendAt)}` : 'Answer written — approve it to send')).then((r) => r && route()); });
+  $$('.ans-send').forEach((b) => { b.onclick = (e) => act(e.currentTarget, () => POST(`/answers/${b.dataset.id}/send`)).then((r) => { if (!r) return; r.ok ? toast('Answer sent ✓') : toast(r.reason, true); route(); }); });
+  $$('.ans-cancel').forEach((b) => { b.onclick = (e) => act(e.currentTarget, () => POST(`/answers/${b.dataset.id}/cancel`), 'Not sent — it is yours to answer').then((r) => r && route()); });
+  $$('.ans-edit').forEach((b) => {
+    b.onclick = () => {
+      const r = list.find((x) => String(x.answer_id) === b.dataset.id);
+      const box = modal(`<h2>Edit the answer to ${esc(r.from_email)}</h2><p class="sub" style="margin-bottom:12px">Your signature and their message (quoted) are added below it automatically.</p>
+        <form id="ans-edit-form"><textarea name="body" style="min-height:220px" data-testid="answer-edit-body">${esc(r.answer_body)}</textarea>
+        <div class="row mt" style="justify-content:flex-end"><button type="button" data-close>Close</button><button class="primary" data-testid="answer-edit-save">Save</button></div></form>`);
+      $('#ans-edit-form', box).onsubmit = async (e) => { e.preventDefault(); const ok = await act(e.submitter, () => PUT(`/answers/${r.answer_id}`, formData(e.target)), 'Answer saved'); if (ok) { closeModal(); route(); } };
+    };
+  });
   $$('.recls').forEach((s) => { s.onchange = () => act(null, () => PUT('/replies/' + s.dataset.id, { classification: s.value }), 'Reclassified').then(() => route()); });
   $$('.handled').forEach((s) => { s.onchange = () => act(null, () => PUT('/replies/' + s.dataset.id, { handled: s.checked })); });
   $$('.opp-stage').forEach((s) => { s.onchange = () => act(null, () => PUT('/opportunities/' + s.dataset.id, { stage: s.value }), 'Stage updated').then(() => route()); });
@@ -1280,11 +1353,15 @@ async function renderSettings({ params = {} } = {}) {
       <div class="card"><h2>Research automation</h2>${f('research_auto_enabled', 'Run research batches automatically', { type: 'checkbox' })}<div class="grid g3">${f('research_interval_minutes', 'Interval (minutes)', { type: 'number' })}${f('research_batch_size', 'Batch size', { type: 'number' })}${f('research_rescreen_hours', 'Re-screen after (hours)', { type: 'number' })}${f('email_recheck_days', 'Re-verify email after (days)', { type: 'number' })}${f('dedup_recheck_days', 'Re-run dedup after (days)', { type: 'number' })}${f('qualified_target', 'Qualified-company target', { type: 'number' })}</div></div>`,
     templates: `<div class="card"><h2>Email templates</h2><p class="sub" style="margin:-6px 0 14px">Variables: {{first_name}} {{company}} {{personalization}} {{angle}} {{offer_pitch}} {{offer_name}} {{sender_name}} {{sender_company}} {{dm_title}}. “first_name” falls back to “there” unless the recipient is the decision-maker's own published email. {{angle}} is an industry-specific sentence.</p>
       <h3>Offer A</h3>${f('template_a_subject', 'Subject')}${f('template_a_body', 'Body', { type: 'textarea' })}<h3>Offer B</h3>${f('template_b_subject', 'Subject')}${f('template_b_body', 'Body', { type: 'textarea' })}<h3>Offer C (local / B2C)</h3>${f('template_c_subject', 'Subject')}${f('template_c_body', 'Body', { type: 'textarea' })}<h3>Follow-up</h3>${f('template_followup_body', 'Body', { type: 'textarea' })}</div>`,
-    ai: `<div class="card"><h2>${ic('sparkle')}AI email writing (Groq — free)</h2><p class="sub" style="margin:-6px 0 14px">Groq's free tier writes each email from the facts research verified on the lead's own website. Nothing to install. Emails that fail the quality check (placeholders, links, invented numbers, wrong length) fall back to your template.</p>
+    ai: `<div class="card"><h2>${ic('sparkle')}AI email writing (Groq — free)</h2><p class="sub" style="margin:-6px 0 14px">Groq's free tier writes each email from what research verified on the lead's own website. Nothing to install. With AI on, a template is never sent: an email that fails the quality check (placeholders, links, invented numbers, wrong length, nothing specific) or can't be written because Groq is unreachable stays a draft and is tried again every hour.</p>
       ${f('ai_writing', 'Write emails with AI when a key is set', { type: 'checkbox' })}
+      ${f('email_style', 'How the first email is written', { type: 'select', options: { detailed: 'Detailed — reads their website first: what is missing, what it usually costs them, what we would build (110–170 words)', short: 'Short — a brief note from one fact on their site (45–90 words)' } })}
+      <div class="grid g2">${f('email_free_offer', 'What you offer for free at the end (businesses)', { ph: 'a short written plan for their site with a fixed price' })}${f('email_free_offer_agency', 'What you offer for free at the end (agencies)', { ph: 'a one-page overview of how we work with agencies, with our rates' })}</div>
       ${f('writing_style_example', 'Optional: paste an email you wrote yourself — the AI copies its tone and length, never its content', { type: 'textarea', ph: 'Hi Sam,\n\nSaw the new booking page on your site...\n\nAhmed' })}
       <div class="grid g2">${f('groq_api_key', 'Groq API key (or GROQ_API_KEY in .env)', { type: 'password' })}${f('groq_model', 'Model', { type: 'select', options: { 'openai/gpt-oss-120b': 'openai/gpt-oss-120b (best writing)', 'openai/gpt-oss-20b': 'openai/gpt-oss-20b (faster, higher free limits)', 'qwen/qwen3.8-27b': 'qwen/qwen3.8-27b' } })}</div>
-      <div class="row">${testBtn('ai', 'Test AI', 'test-ai')}<a href="https://console.groq.com/keys" target="_blank" rel="noopener" class="small-t">Get a free key →</a></div></div>`,
+      <div class="row">${testBtn('ai', 'Test AI', 'test-ai')}<a href="https://console.groq.com/keys" target="_blank" rel="noopener" class="small-t">Get a free key →</a></div></div>
+      <div class="card" data-testid="answer-settings-ai"><h2>${ic('inbox')}Answering replies</h2><p class="sub" style="margin:-6px 0 14px">When someone writes back interested or with a question, the AI writes the answer and it goes out 15 to 45 minutes later in the same thread. Prices, contracts, complaints and anything unclear are left for you. Also on the Replies page.</p>
+      <div class="grid g3">${f('auto_reply_mode', 'Answers', { type: 'select', options: META.answerModes || {} })}${f('auto_reply_max', 'Automatic answers per conversation', { type: 'number' })}${f('booking_link', 'Your booking link (optional)', { ph: 'https://calendly.com/you/15min' })}</div></div>`,
   };
   sections.security = `<div class="grid g2" id="sec-root" data-testid="security">
       ${params.welcome ? `<div class="alert sev-medium" style="grid-column:1/-1">${ic('shield')}<div class="grow"><strong>Your account is ready.</strong> Turn on two-factor authentication below to finish securing it.</div></div>` : ''}

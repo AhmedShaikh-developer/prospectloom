@@ -44,8 +44,15 @@ api.get('/openai/v1/models', (req, res) => res.json({ data: [{ id: 'openai/gpt-o
 api.post('/openai/v1/chat/completions', (req, res) => {
   lastPrompt = req.body.messages.map((m) => m.content).join('\n\n');
   const good = 'SUBJECT: your booking page\nBODY:\nHi there,\n\nAI-WRITTEN note. Saw on your site that people can only book by phone right now.\n\nWe set up simple online booking and ordering for small local places, usually in a week or two, so the phone rings a bit less.\n\nIs that something you have thought about, or not a priority right now?\n\nAlex';
+  // The detailed email (written from the website audit) and answers to replies.
+  const detailed = 'SUBJECT: patient forms and booking on your site\nBODY:\nHi there,\n\nAI-WRITTEN detailed note from the website audit. I was on your website and saw that people can only book by phone, and the forms are PDFs to print. The listings link goes off to another site, and the page is hard to use on a mobile phone.\n\nIn most local businesses that means people who look you up in the evening book or order somewhere else, and the details get typed in twice by hand.\n\nWe would build online booking and ordering that works on a phone, with forms that land in a simple CRM and send reminders on their own.\n\nIf it helps, I can send a short written plan for your site with a fixed price. Would that be useful?\n\nAlex';
+  const answer = 'BODY:\nHi Sam,\n\nThanks for getting back to me. AI-ANSWER: glad it is useful, I will put the plan together and send it within two working days.\n\nTwo quick questions so it fits: do you take most bookings by phone today, and is there a system you already use for the calendar?\n\nAlex';
   const bad = 'SUBJECT: Hi [Name]!\nBODY:\nHi [Name]! We grew revenue 300% for clients like you! Visit https://example.com now!';
-  res.json({ choices: [{ message: { role: 'assistant', content: groqMode === 'bad' ? bad : good } }] });
+  let out = good;
+  if (/THEIR REPLY/.test(lastPrompt)) out = /price|cost|how much/i.test(lastPrompt.split('THEIR REPLY')[1] || '') ? 'HANDOFF: they ask for a price' : answer;
+  else if (/OBSERVATIONS FROM THEIR WEBSITE|NOTES ABOUT THEIR WORK/.test(lastPrompt)) out = detailed;
+  if (groqMode === 'bad') out = bad;
+  res.json({ choices: [{ message: { role: 'assistant', content: out } }] });
 });
 
 // OpenStreetMap mocks (Nominatim + Overpass)
@@ -63,6 +70,8 @@ api.post('/osm/overpass', express.urlencoded({ extended: false }), async (req, r
     return res.json({ elements: [
       { type: 'node', id: 601, tags: { name: 'Taco Town', amenity: 'restaurant', website: 'https://tacotown-atx.com', 'addr:city': 'Austin', 'addr:state': 'TX' } },
       { type: 'node', id: 602, tags: { name: 'Pho Real', amenity: 'restaurant', website: 'phoreal-atx.com' } },
+      // no website of its own, but the listing publishes an email (only when the query asks for these)
+      ...(/\[!"website"\]/.test(req.body.data) ? [{ type: 'node', id: 603, tags: { name: 'Corner Kitchen', amenity: 'restaurant', email: 'cornerkitchen.atx@gmail.com', phone: '+1 512 555 0177', 'addr:city': 'Austin', 'addr:state': 'TX' } }] : []),
     ] });
   }
   res.json({ elements: [
@@ -167,6 +176,15 @@ const SITES = {
     '/contact': layout('Contact', '', '<p>Catering &amp; events: <a href="mailto:hello@sunrise-cafe.com">hello@sunrise-cafe.com</a></p>'),
   },
   4515: { robots: 'User-agent: *\nDisallow: /', '/': layout('Blocked', 'nope', '<p>hello@blocked.com</p>') },
+  4517: { // real estate agency: listings go to Zillow, plain contact form, no home valuation page
+    '/': '<!doctype html><html><head><title>Lakeside Realty | Austin homes</title><meta name="viewport" content="width=device-width"><meta name="description" content="Lakeside Realty helps families buy and sell homes around Lake Travis and Austin, Texas."></head><body><h1>Lakeside Realty</h1><h2>Helping Austin families buy and sell homes since 2011</h2><a href="https://www.zillow.com/homes/for_sale/Austin-TX/">Search homes for sale</a><a href="/contact">Contact</a><p>Office: 12 Lake Dr, Austin, TX 78734 · (512) 555-0123</p><p>© 2025 Lakeside Realty</p></body></html>',
+    '/contact': layout('Contact', '', '<form action="/send" method="post"><input type="email" name="email"><textarea name="message"></textarea><button>Send</button></form><p>Email us: <a href="mailto:hello@lakeside-realty.com">hello@lakeside-realty.com</a></p>'),
+  },
+  4518: { // dentist: phone-only booking, PDF patient forms, no mobile layout
+    '/': layout('Brightway Dental | Family dentist in Austin', 'Brightway Dental is a family dental practice in Austin, Texas.', '<h1>Brightway Dental</h1><h2>Gentle family dentistry in north Austin</h2><p>To schedule an appointment, please call (512) 555-0188.</p><a href="/new-patients">New patients</a><p>500 Oak St, Austin, TX 78758</p><p>© 2019 Brightway Dental</p>'),
+    '/new-patients': layout('New patients', '', '<h2>Before your first visit</h2><a href="/files/new-patient-registration.pdf">New Patient Registration Form</a><a href="/files/medical-history.pdf">Medical History Form</a>'),
+    '/contact': layout('Contact', '', '<p>Front desk: <a href="mailto:frontdesk@brightway-dental.com">frontdesk@brightway-dental.com</a></p>'),
+  },
 };
 for (const [port, pages] of Object.entries(SITES)) {
   const site = express();
@@ -174,4 +192,4 @@ for (const [port, pages] of Object.entries(SITES)) {
   site.get('*', (req, res) => (pages[req.path] ? res.type('html').send(pages[req.path]) : res.status(404).send('not found')));
   site.listen(Number(port), '127.0.0.1');
 }
-console.log('mock services ready on 4501 (+ sites 4511-4515)');
+console.log('mock services ready on 4501 (+ sites 4511-4518)');

@@ -1,7 +1,7 @@
 import { expect } from '@playwright/test';
 
 export const MOCK = 'http://127.0.0.1:4501';
-export const SITE = { acme: 'http://127.0.0.1:4511', pixel: 'http://127.0.0.1:4512', northwind: 'http://127.0.0.1:4513', quiet: 'http://127.0.0.1:4514', blocked: 'http://127.0.0.1:4515', cafe: 'http://127.0.0.1:4516' };
+export const SITE = { acme: 'http://127.0.0.1:4511', pixel: 'http://127.0.0.1:4512', northwind: 'http://127.0.0.1:4513', quiet: 'http://127.0.0.1:4514', blocked: 'http://127.0.0.1:4515', cafe: 'http://127.0.0.1:4516', realty: 'http://127.0.0.1:4517', dental: 'http://127.0.0.1:4518' };
 
 export const COMPLIANCE = {
   sender_name: 'Alex Rivera',

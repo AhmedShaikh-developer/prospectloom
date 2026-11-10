@@ -50,7 +50,7 @@ export function series(days = 14) {
     days: keys,
     leads, leadsTotal: total, prevTotal,
     ready: perDay(`SELECT date(ready_at, 'localtime') AS d, COUNT(*) AS n FROM companies WHERE ready_at IS NOT NULL AND date(ready_at, 'localtime') >= :since GROUP BY d`, keys),
-    sent: perDay(`SELECT date(sent_at, 'localtime') AS d, COUNT(*) AS n FROM messages WHERE status IN ('sent','bounced') AND date(sent_at, 'localtime') >= :since GROUP BY d`, keys),
+    sent: perDay(`SELECT date(sent_at, 'localtime') AS d, COUNT(*) AS n FROM messages WHERE status IN ('sent','bounced') AND kind != 'reply' AND date(sent_at, 'localtime') >= :since GROUP BY d`, keys),
     replies: perDay(`SELECT date(received_at, 'localtime') AS d, COUNT(*) AS n FROM replies WHERE classification IN ('positive','neutral','negative') AND date(received_at, 'localtime') >= :since GROUP BY d`, keys),
   };
 }
@@ -82,7 +82,7 @@ export function overview() {
     ramp.push({ date: d.toISOString().slice(0, 10), limit: w.limit });
   }
   const totals = q.get(`SELECT
-      (SELECT COUNT(*) FROM messages WHERE status IN ('sent','bounced')) AS sent,
+      (SELECT COUNT(*) FROM messages WHERE status IN ('sent','bounced') AND kind != 'reply') AS sent,
       (SELECT COUNT(*) FROM messages WHERE status = 'bounced') AS bounced,
       (SELECT COUNT(*) FROM replies WHERE classification IN ('positive','neutral','negative')) AS replies,
       (SELECT COUNT(*) FROM replies WHERE classification = 'positive') AS positive,
@@ -114,7 +114,7 @@ export function daily({ days = 30 } = {}) {
   const since = new Date(Date.now() - (days + 2) * DAY).toISOString();
   const rows = Object.fromEntries(keys.map((k) => [k, { key: k, sent: 0, replies: 0, positive: 0, bounced: 0, leads: 0 }]));
   const add = (t, field) => { const r = rows[dayKey(parseTs(t), tz)]; if (r) r[field]++; };
-  for (const m of q.all("SELECT sent_at AS t, status FROM messages WHERE status IN ('sent','bounced') AND sent_at >= :since", { since })) {
+  for (const m of q.all("SELECT sent_at AS t, status FROM messages WHERE status IN ('sent','bounced') AND kind != 'reply' AND sent_at >= :since", { since })) {
     add(m.t, 'sent'); if (m.status === 'bounced') add(m.t, 'bounced');
   }
   for (const r of q.all("SELECT received_at AS t, classification AS c FROM replies WHERE classification IN ('positive','neutral','negative') AND received_at >= :since", { since })) {
@@ -124,8 +124,10 @@ export function daily({ days = 30 } = {}) {
   const list = keys.map((k) => rows[k]);
   const sum = (n) => list.slice(0, n).reduce((a, r) => ({ sent: a.sent + r.sent, replies: a.replies + r.replies, positive: a.positive + r.positive, bounced: a.bounced + r.bounced, leads: a.leads + r.leads }), { sent: 0, replies: 0, positive: 0, bounced: 0, leads: 0 });
   const allTime = q.get(`SELECT
-      (SELECT COUNT(*) FROM messages WHERE status IN ('sent','bounced')) AS sent,
+      (SELECT COUNT(*) FROM messages WHERE status IN ('sent','bounced') AND kind != 'reply') AS sent,
       (SELECT COUNT(*) FROM replies WHERE classification IN ('positive','neutral','negative')) AS replies,
+      (SELECT COUNT(*) FROM replies WHERE classification = 'auto_reply' AND company_id IS NOT NULL) AS outOfOffice,
+      (SELECT COUNT(*) FROM messages WHERE kind = 'reply' AND status = 'sent') AS answered,
       (SELECT COUNT(*) FROM replies WHERE classification = 'positive') AS positive,
       (SELECT COUNT(*) FROM messages WHERE status = 'bounced') AS bounced,
       (SELECT COUNT(*) FROM companies) AS leads`);

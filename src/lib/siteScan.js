@@ -2,6 +2,7 @@
 // It only reports what is literally on the page, with the page URL as the source.
 import { fetchPage } from './http.js';
 import { extractEmails } from './emailRules.js';
+import { emptySignals, collectSignals, interestingLinks } from './audit.js';
 
 const CANDIDATE_PATHS = ['/', '/contact', '/contact-us', '/about', '/about-us', '/partners', '/partnerships', '/services', '/work', '/portfolio', '/case-studies', '/careers', '/jobs', '/team', '/blog', '/news'];
 
@@ -35,7 +36,7 @@ const TECH = [
   ['Shopify', /cdn\.shopify\.com|Shopify\.theme/i], ['WordPress', /wp-content\/|wp-includes\//i], ['WooCommerce', /woocommerce/i],
   ['Webflow', /webflow\.(js|com)|data-wf-site/i], ['Squarespace', /squarespace\.com|static1\.squarespace/i], ['Wix', /wixstatic\.com|wix\.com/i],
   ['HubSpot', /js\.hs-scripts\.com|hsforms|hs-analytics/i], ['Salesforce', /salesforce\.com|force\.com|pardot/i], ['Zoho', /zoho\.(com|eu)/i],
-  ['Next.js', /__NEXT_DATA__|\/_next\//], ['React', /data-reactroot|react-dom/i], ['Magento', /mage\/|Magento/], ['BigCommerce', /bigcommerce/i],
+  ['Next.js', /__NEXT_DATA__|\/_next\//], ['React', /data-reactroot|react-dom/i], ['Magento', /Mage\.Cookies|data-mage-init|\/static\/version\d+\/frontend\//], ['BigCommerce', /bigcommerce/i],
   ['Intercom', /intercom/i], ['Zendesk', /zendesk|zdassets/i], ['Calendly', /calendly\.com/i], ['Typeform', /typeform/i], ['Google Analytics', /gtag\(|googletagmanager/i],
 ];
 
@@ -69,15 +70,17 @@ function collectFacts(html, url, path, facts) {
   }
 }
 
-export async function scanWebsite(domainOrUrl, { maxPages = 10 } = {}) {
+export async function scanWebsite(domainOrUrl, { maxPages = 12 } = {}) {
   const base = /^https?:\/\//.test(domainOrUrl) ? new URL(domainOrUrl).origin : `https://${domainOrUrl}`;
   const result = { base, pages: [], emails: [], title: '', description: '', linkedin: '', usAddress: null, mailtoEmails: [], errors: [],
-    facts: { headings: [], caseStudies: [], tech: [], hiring: [], phones: [], social: {} } };
+    facts: { headings: [], caseStudies: [], tech: [], hiring: [], phones: [], social: {} }, signals: emptySignals() };
   const emailSources = new Map();
   let origin = base;
   // A DNS failure throws inside fetchPage (public-address check); treat it as a failed page.
   const get = (url) => fetchPage(url).catch((e) => ({ ok: false, status: 0, url, error: e.message, html: '' }));
-  for (const p of CANDIDATE_PATHS) {
+  const queue = [...CANDIDATE_PATHS];
+  for (let qi = 0; qi < queue.length; qi++) {
+    const p = queue[qi];
     if (result.pages.length >= maxPages) break;
     const url = origin + p;
     let page = await get(url);
@@ -121,6 +124,9 @@ export async function scanWebsite(domainOrUrl, { maxPages = 10 } = {}) {
       if (hit && !result.facts.social[k]) result.facts.social[k] = hit;
     }
     collectFacts(html, page.url, p, result.facts);
+    collectSignals(html, page.url, p, result.signals);
+    // Pages the homepage links to that show how customers book, order or get in touch (menu, booking, patient forms…)
+    if (p === '/') for (const extra of interestingLinks(html, page.url)) if (!queue.includes(extra)) queue.splice(qi + 2, 0, extra);
     for (const m of html.matchAll(/mailto:([^"'?>\s]+)/gi)) {
       const e = decodeURIComponent(m[1]).toLowerCase();
       if (!emailSources.has(e)) emailSources.set(e, page.url);

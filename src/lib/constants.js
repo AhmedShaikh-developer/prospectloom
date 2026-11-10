@@ -33,6 +33,7 @@ export const TERMINAL_STATUSES = new Set(['DO_NOT_CONTACT']);
 // Phase 4: evidence classifications.
 export const EVIDENCE_TYPES = {
   official_website: 'Published on official company website',
+  map_listing: 'Published in the business\'s own public map listing (OpenStreetMap)',
   partner_directory: 'Reputable public partner directory',
   partnership_channel: 'Identified partnership / vendor channel',
   public_work_email: 'Publicly identified work email of decision-maker',
@@ -43,7 +44,7 @@ export const EVIDENCE_TYPES = {
   hubspot_existing: 'Existing HubSpot value (re-verify)',
   pattern_guess: 'Guessed pattern (NOT allowed)',
 };
-export const ACCEPTED_EVIDENCE = new Set(['official_website', 'partner_directory', 'partnership_channel', 'public_work_email']);
+export const ACCEPTED_EVIDENCE = new Set(['official_website', 'map_listing', 'partner_directory', 'partnership_channel', 'public_work_email']);
 // Emails from data providers / your own lists. Usable only when Settings → allow_provider_emails is on.
 export const PROVIDER_EVIDENCE = new Set(['apollo_database', 'clay_enrichment', 'imported_list', 'hunter_io']);
 

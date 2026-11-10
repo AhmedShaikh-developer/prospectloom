@@ -17,13 +17,16 @@ const getRun = () => runs.get(currentDbPath()) || null;
  */
 export function nextBatch(size = getNum('research_batch_size'), excludeIds = []) {
   const hours = getNum('research_rescreen_hours');
+  // Besides the normal research queue, leads checked before website audits existed get one audit pass
+  // (ready-to-email ones first), so their emails can name what is missing on their site.
   return q.all(`
     SELECT id FROM companies
-    WHERE status IN ('RESEARCHING','HOLD_VERIFY')
-      AND (next_screen_at IS NULL OR next_screen_at <= :now)
-      AND (last_screened_at IS NULL OR julianday('now') - julianday(last_screened_at) >= :h / 24.0 OR updated_at > last_screened_at OR next_screen_at <= :now)
+    WHERE (next_screen_at IS NULL OR next_screen_at <= :now)
+      AND ((status IN ('RESEARCHING','HOLD_VERIFY')
+            AND (last_screened_at IS NULL OR julianday('now') - julianday(last_screened_at) >= :h / 24.0 OR updated_at > last_screened_at OR next_screen_at <= :now))
+        OR (status IN ('READY','RESEARCHING','HOLD_VERIFY') AND audit_at IS NULL AND (site_status IS NULL OR site_status = 'none')))
       ${excludeIds.length ? `AND id NOT IN (${excludeIds.map(Number).join(',')})` : ''}
-    ORDER BY (last_screened_at IS NULL) DESC, fit_score DESC NULLS LAST, last_screened_at ASC, id ASC
+    ORDER BY (last_screened_at IS NULL) DESC, (status = 'READY' AND audit_at IS NULL) DESC, fit_score DESC NULLS LAST, last_screened_at ASC, id ASC
     LIMIT :n`, { h: hours, n: size, now: new Date().toISOString() }).map((r) => r.id);
 }
 

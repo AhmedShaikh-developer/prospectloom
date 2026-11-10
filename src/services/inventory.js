@@ -48,7 +48,7 @@ export function inventory() {
 export function funnel() {
   const one = (sql) => q.get(sql).n;
   return {
-    sent: one("SELECT COUNT(*) AS n FROM messages WHERE status IN ('sent','bounced')"),
+    sent: one("SELECT COUNT(*) AS n FROM messages WHERE status IN ('sent','bounced') AND kind != 'reply'"),
     introsSent: one("SELECT COUNT(*) AS n FROM messages WHERE kind='intro' AND status IN ('sent','bounced')"),
     followupsSent: one("SELECT COUNT(*) AS n FROM messages WHERE kind='follow_up' AND status IN ('sent','bounced')"),
     bounced: one("SELECT COUNT(*) AS n FROM messages WHERE status = 'bounced'"),
@@ -124,5 +124,5 @@ export function topMissing(evaluateFn, limit = 400) {
 }
 
 export function todayStatus() {
-  return { ...quotaStatus(), plan: sendPlan(), warmup: warmupPlan(), autoSend: getBool('auto_send_enabled') || getBool('autopilot_enabled'), autopilot: getBool('autopilot_enabled'), approved: q.get("SELECT COUNT(*) AS n FROM messages WHERE status = 'approved'").n, drafts: q.get("SELECT COUNT(*) AS n FROM messages WHERE status = 'draft'").n };
+  return { ...quotaStatus(), plan: sendPlan(), warmup: warmupPlan(), autoSend: getBool('auto_send_enabled') || getBool('autopilot_enabled'), autopilot: getBool('autopilot_enabled'), approved: q.get("SELECT COUNT(*) AS n FROM messages WHERE status = 'approved' AND kind != 'reply'").n, drafts: q.get("SELECT COUNT(*) AS n FROM messages WHERE status = 'draft' AND kind != 'reply'").n };
 }

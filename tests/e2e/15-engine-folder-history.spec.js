@@ -36,6 +36,7 @@ test.describe.serial('Lead engine, leads folder & contact history', () => {
     await page.goto('/#/import');
     await expect(page.getByTestId('finder-location')).toHaveValue('Austin, TX');
     await expect(page.getByTestId('finder-count')).toHaveText('2 businesses with a website', { timeout: 15000 });
+    await expect(page.getByTestId('finder-noweb')).toContainText('1 without a website');
     await expect(page.getByTestId('jobs-tray').getByTestId('job-running')).toHaveCount(0);
     await request.post(`${MOCK}/__osm-delay`, { data: { ms: 0 } });
   });
@@ -55,7 +56,11 @@ test.describe.serial('Lead engine, leads folder & contact history', () => {
     await expectToast(page, 'Saved — 1 search planned');
 
     await page.getByTestId('engine-run-now').click();
-    await expect.poll(async () => (await api(request, 'GET', '/engine')).imported, { timeout: 15000 }).toBe(2);
+    // 2 with a website + 1 without a website that publishes an email in its map listing
+    await expect.poll(async () => (await api(request, 'GET', '/engine')).imported, { timeout: 15000 }).toBe(3);
+    const nw = (await api(request, 'GET', '/companies?search=cornerkitchen')).rows[0];
+    expect(nw.email_evidence_type).toBe('map_listing');
+    expect(nw.site_status).toBe('none');
     const c = (await api(request, 'GET', '/companies?search=tacotown-atx.com')).rows[0];
     expect(c.lead_origin).toBe('openstreetmap');
     expect(c.offer).toBe('C');

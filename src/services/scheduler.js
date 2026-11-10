@@ -7,12 +7,14 @@ import { saveDailySummary } from './reports.js';
 import * as imap from '../integrations/imap.js';
 import * as engine from './engine.js';
 import * as sources from './sources.js';
+import * as responder from './responder.js';
 import { withWorkspace, currentDbPath, isPrimaryWorkspace } from '../db/index.js';
 import { allPaths } from './workspaces.js';
 import { importFolder } from './discovery.js';
 import { trackJob } from './jobs.js';
 
-const autopilotJob = () => trackJob('autopilot', "Autopilot: preparing today's emails", {}, (ctx) => runAutopilot({ onProgress: ctx.progress }).then((r) => ({ ...r, summary: r.held != null ? `${r.held} email(s) written and waiting for your approval · ${r.aiWritten} written by AI` : `${r.approved} email(s) approved to send · ${r.aiWritten} written by AI` })));
+const autopilotJob = () => trackJob('autopilot', "Autopilot: preparing today's emails", {}, (ctx) => runAutopilot({ onProgress: ctx.progress }).then((r) => ({ ...r,
+  summary: `${r.held != null ? `${r.held} email(s) written and waiting for your approval` : `${r.approved} email(s) approved to send`} · ${r.aiWritten} written by AI${r.waitingForAi ? ` · ${r.waitingForAi} waiting for AI (retried hourly)` : ''}` })));
 
 let timer = null;
 const busy = new Set();
@@ -80,6 +82,8 @@ async function tickWorkspace() {
   }
   // Auto-send approved messages, one per tick, respecting window/quota/spacing.
   guarded('send', () => autoSendTick());
+  // Answers to people who wrote back: written by AI, sent after a short human-like pause.
+  guarded('responder', () => responder.tick());
 }
 
 export function startScheduler() {

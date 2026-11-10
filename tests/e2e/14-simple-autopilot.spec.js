@@ -99,16 +99,22 @@ test.describe.serial('Simple pipeline: local finder → research → autopilot',
     expect((await api(request, 'GET', '/companies?search=sunrise-cafe.com')).rows[0].status).toBe('SENT');
   });
 
-  test('quality gate: a bad AI draft (placeholders, links, invented numbers) falls back to the template', async ({ request }) => {
+  test('quality gate: a bad AI draft (placeholders, links, invented numbers) is never sent, nor is the template', async ({ request }) => {
     await request.post(`${MOCK}/__groq-mode`, { data: { mode: 'bad' } });
     const r = await createReadyCompany(request, 'Gate Test Co');
     const run = await api(request, 'POST', '/autopilot/run');
     expect(run.aiRejected).toBeGreaterThanOrEqual(1);
     expect(run.notes.join(' ')).toContain('Gate Test Co: AI draft rejected');
-    const m = (await api(request, 'GET', '/outreach/messages?status=approved,sent')).find((x) => x.company_id === r.id);
+    expect((await api(request, 'GET', '/outreach/messages?status=approved,sent')).find((x) => x.company_id === r.id)).toBeUndefined();
+    const m = (await api(request, 'GET', '/outreach/messages?status=draft')).find((x) => x.company_id === r.id);
     expect(m.body).not.toContain('[Name]');
-    expect(m.body).toContain('Saw that you launched'); // the verified opener from the template
+    expect(m.ai_attempts).toBe(1);
+    expect(m.ai_error).toContain('did not pass the check');
+    // the next run (AI good again) writes it and approves it
     await request.post(`${MOCK}/__groq-mode`, { data: { mode: 'good' } });
+    await api(request, 'POST', '/autopilot/run');
+    const after = (await api(request, 'GET', '/outreach/messages?status=approved')).find((x) => x.company_id === r.id);
+    expect(after.body).toContain('AI-WRITTEN');
   });
 
   test('settings: autopilot, timezone, Groq and Offer C are editable', async ({ page }) => {

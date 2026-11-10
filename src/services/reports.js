@@ -7,7 +7,7 @@ export function dailySummary(date = today()) {
   const f = funnel();
   const dayRuns = q.all("SELECT kind, stats FROM runs WHERE date(started_at) = :d AND kind = 'research'", { d: date });
   const newReady = q.get('SELECT COUNT(*) AS n FROM companies WHERE date(ready_at) = :d', { d: date }).n;
-  const sentToday = q.get("SELECT COUNT(*) AS n FROM messages WHERE status IN ('sent','bounced') AND date(sent_at) = :d", { d: date }).n;
+  const sentToday = q.get("SELECT COUNT(*) AS n FROM messages WHERE status IN ('sent','bounced') AND kind != 'reply' AND date(sent_at) = :d", { d: date }).n;
   const screenedToday = dayRuns.reduce((s, r) => s + (JSON.parse(r.stats || '{}').screened || 0), 0);
   const hubspotOps = Object.fromEntries(q.all('SELECT status, COUNT(*) AS n FROM hubspot_ops GROUP BY status').map((r) => [r.status, r.n]));
   const summary = {

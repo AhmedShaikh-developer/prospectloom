@@ -16,7 +16,7 @@ export const DEFAULT_SETTINGS = {
   offer_b_industries: 'marketing agencies, UX/UI agencies, Shopify/e-commerce agencies, Webflow/website agencies, branding studios, digital transformation firms',
   // Offer C: consumer-facing (B2C) local businesses — edit the pitch to match what you sell them.
   offer_c_name: 'Websites & Automation for Local Businesses',
-  offer_c_pitch: 'We build fast websites, online booking/ordering and simple automations that save local businesses hours every week.',
+  offer_c_pitch: 'We build websites, online booking and ordering, simple CRMs and POS setups for local businesses, so enquiries, bookings and payments all land in one place.',
   offer_c_industries: 'restaurants, cafés, clinics, dentists, salons, gyms, real estate, home services, retail shops, hotels',
 
   // Pipeline: 'simple' = automatic research, decision-maker optional; 'strict' = original manual-evidence rules.
@@ -37,6 +37,7 @@ export const DEFAULT_SETTINGS = {
   engine_searches_per_hour: '20',
   engine_rescan_days: '30',
   engine_daily_cap: '1500',
+  engine_no_website: '1',       // also add businesses without a website that publish an email in their map listing
   engine_apollo_enabled: '0',
   engine_apollo_keywords: '',
   engine_apollo_titles: 'Founder, CEO, Owner, COO, Managing Director',
@@ -99,6 +100,18 @@ export const DEFAULT_SETTINGS = {
 
   // AI email writing via Groq (free tier). Used whenever a Groq API key is set.
   ai_writing: '1',
+  // 'detailed' = read their website first and write what we saw, what it costs them and what we'd build (110–170 words).
+  // 'short' = the brief note from one verified fact (45–90 words).
+  email_style: 'detailed',
+  email_free_offer: 'a short written plan for their site with a fixed price',
+  email_free_offer_agency: 'a one-page overview of how we work with agencies, with our rates',
+  // Answers to people who write back: auto = written by AI and sent after 15–45 min; review = you approve; off.
+  auto_reply_mode: 'auto',
+  auto_reply_max: '2',          // automatic answers per conversation, then it is yours
+  auto_reply_delay_min: '15',
+  auto_reply_delay_max: '45',
+  booking_link: '',             // optional: your Calendly / Cal.com link, offered to people who want a call
+  ai_last_error: '',
   groq_model: 'openai/gpt-oss-120b',
   writing_style_example: '',   // optional: an email you wrote yourself; the AI copies its tone, never its content
   autopilot_review: '0',
@@ -239,6 +252,7 @@ Just floating this back up in case it got buried. Happy to share a couple of rel
 Best,
 {{sender_name}}`,
 };
+OLD_TEMPLATE_DEFAULTS.offer_c_pitch = 'We build fast websites, online booking/ordering and simple automations that save local businesses hours every week.';
 export function upgradeDefaultTemplates() {
   for (const [key, old] of Object.entries(OLD_TEMPLATE_DEFAULTS)) {
     const row = q.get('SELECT value FROM settings WHERE key = :key', { key });
