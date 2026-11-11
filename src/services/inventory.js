@@ -85,7 +85,7 @@ export function blockers() {
   if (!ints.smtp.configured) out.push({ severity: 'critical', area: 'Hostinger mailbox', message: 'Mailbox password missing — enter it in Settings → Integrations so emails can be sent', link: '#/settings?tab=integrations' });
   else if (!ints.imap.configured && getSetting('mail_transport') !== 'capture') out.push({ severity: 'high', area: 'Hostinger mailbox', message: 'Mailbox reading is off — Sent-folder history, replies and bounces are not being checked', link: '#/settings?tab=integrations' });
   const mp = mailer.mailPause();
-  if (mp.error) out.push({ severity: 'critical', area: 'Hostinger mailbox', message: `Last send failed: ${mp.error}${mp.paused ? ' Sending retries automatically in a few minutes.' : ''}`, link: '#/settings?tab=integrations' });
+  if (mp.error) out.push({ severity: 'critical', area: 'Hostinger mailbox', message: `Last send failed: ${mp.error}${mp.kind === 'auth' ? ' The login is tested again every 30 minutes.' : ' The connection is tested again automatically every few minutes and sending resumes by itself.'}`, link: '#/settings?tab=integrations' });
   if (!ints.ai.configured) out.push({ severity: 'low', area: 'AI writing', message: 'No Groq key — emails use your templates instead of being written for each lead', link: '#/settings' });
   // Research only flags what a human can act on. Expired websites are excluded automatically; companies
   // with no published email are re-checked every 14 days by themselves.

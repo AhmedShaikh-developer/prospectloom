@@ -58,6 +58,7 @@ export const DEFAULT_SETTINGS = {
   daily_send_limit: '10',
   send_window_start: '9',     // hour, local time of the server
   send_window_end: '15',
+  send_catchup_minutes: '120', // after the window: emails that missed their time (connection drop, app closed) still go out
   send_days: '1,2,3,4,5',     // Mon-Fri
   min_minutes_between_sends: '2',   // shortest gap between two emails (minutes)
   max_minutes_between_sends: '20',  // usual longest gap; a few longer breaks are added to fill the window

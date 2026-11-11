@@ -2,7 +2,7 @@
 import { getBool, getNum, getSetting, setSetting } from '../lib/settings.js';
 import { runResearch, isRunning } from './research.js';
 import { syncMailbox } from './replies.js';
-import { autoSendTick, generateDrafts, generateFollowups, runAutopilot, zonedNow, zonedClock } from './outreach.js';
+import { sendCycle, generateDrafts, generateFollowups, runAutopilot, zonedNow, zonedClock } from './outreach.js';
 import { saveDailySummary } from './reports.js';
 import * as imap from '../integrations/imap.js';
 import * as engine from './engine.js';
@@ -28,6 +28,11 @@ async function guarded(name, fn) {
   try { await fn(); } catch (e) { console.error(`[scheduler] ${name}:`, e.message); } finally { busy.delete(key); }
 }
 const isBusy = (name) => busy.has(lockKey(name));
+
+/** The last writing run failed because Groq could not be reached (not a rate limit or a bad key). */
+function aiUnreachable() {
+  try { return /reach Groq|fetch failed|Groq error 5/i.test(JSON.parse(getSetting('ai_last_error') || '{}').error || ''); } catch { return false; }
+}
 
 const minutesSince = (iso) => (iso ? (Date.now() - new Date(iso).getTime()) / 60000 : Infinity);
 
@@ -76,12 +81,14 @@ async function tickWorkspace() {
     });
   }
   // Autopilot top-up: research finishes during the day, so newly READY leads can still go out today.
-  if (autopilot && !isBusy('daily') && minutesSince(getSetting('last_autopilot_topup')) >= 60) {
+  // If the last run could not reach Groq (an internet blip), it tries again after 10 minutes, not an hour.
+  if (autopilot && !isBusy('daily') && minutesSince(getSetting('last_autopilot_topup')) >= (aiUnreachable() ? 10 : 60)) {
     setSetting('last_autopilot_topup', new Date().toISOString());
     guarded('autopilot', () => autopilotJob());
   }
-  // Auto-send approved messages, one per tick, respecting window/quota/spacing.
-  guarded('send', () => autoSendTick());
+  // Auto-send approved messages, one per tick, respecting window/quota/spacing. After a mailbox error the
+  // connection is tested again first (1, 2, 3, then every 5 minutes), so sending resumes on its own.
+  guarded('send', () => sendCycle());
   // Answers to people who wrote back: written by AI, sent after a short human-like pause.
   guarded('responder', () => responder.tick());
 }

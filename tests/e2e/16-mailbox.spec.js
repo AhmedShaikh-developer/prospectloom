@@ -73,4 +73,51 @@ test.describe.serial('Hostinger mailbox', () => {
     await expect(page.getByTestId('blockers')).not.toContainText('Last send failed');
     expect((await api(request, 'POST', '/test/send-tick')).skipped).not.toBe('mailbox error');
   });
+
+  test('a dropped connection fixes itself: the mailbox is tested again and the email goes out on its own', async ({ page, request }) => {
+    const queued = (await api(request, 'GET', '/outreach/messages')).filter((x) => x.status === 'approved').map((x) => x.id);
+    if (queued.length) await api(request, 'POST', '/outreach/cancel', { ids: queued });
+    const c = await createReadyCompany(request, 'Reconnect Co', { fit_score: 9 });
+    const d = await api(request, 'POST', '/outreach/drafts', { companyIds: [c.id] });
+    await api(request, 'POST', '/outreach/approve', { ids: d.ids });
+    await api(request, 'PUT', '/settings', { auto_send_enabled: '1', mail_transport: 'smtp', smtp_host: '127.0.0.1', smtp_port: '1', smtp_pass: 'not-the-password' });
+
+    // The internet drops just as the email is due: it stays approved and sending waits a minute
+    const first = await api(request, 'POST', '/test/send-cycle');
+    expect(first.send.retry).toBe(true);
+    const row = (await api(request, 'GET', '/automation')).rows.find((r) => r.key === 'sending');
+    expect(row.state).toBe('paused');
+    expect(row.nextLabel).toBe('Tests the connection');
+    await page.goto('/#/automation');
+    await expect(page.locator('[data-testid="auto-row"][data-key="sending"]').getByTestId('auto-reason')).toContainText('tests the connection again by itself');
+
+    // During the wait nothing is tried
+    const waiting = await api(request, 'POST', '/test/send-cycle');
+    expect(waiting.reconnect.waiting).toBeTruthy();
+    expect(waiting.send.skipped).toBe('mailbox error');
+
+    // The wait is over but the connection is still down: it tests, fails, and waits a little longer
+    await api(request, 'POST', '/test/mail-wait-over');
+    const still = await api(request, 'POST', '/test/send-cycle');
+    expect(still.reconnect.ok).toBe(false);
+    expect(new Date(still.reconnect.next).getTime()).toBeGreaterThan(Date.now() + 60_000);
+    expect((await api(request, 'GET', '/outreach/messages')).find((x) => x.id === d.ids[0]).status).toBe('approved');
+
+    // The connection is back: the next test passes and the same email goes out, no button pressed
+    await api(request, 'PUT', '/settings', { mail_transport: 'capture', smtp_host: '', smtp_port: '' });
+    await api(request, 'POST', '/test/mail-wait-over');
+    const back = await api(request, 'POST', '/test/send-cycle');
+    expect(back.reconnect.reconnected).toBe(true);
+    expect(back.send.ok, back.send.reason).toBe(true);
+    expect((await api(request, 'GET', '/outreach/messages')).find((x) => x.id === d.ids[0]).status).toBe('sent');
+    await page.goto('/#/dashboard');
+    await expect(page.getByTestId('blockers')).not.toContainText('Last send failed');
+  });
+
+  test('a mail connection that times out in the background never stops the app', async ({ request }) => {
+    await api(request, 'POST', '/test/network-drop');
+    await new Promise((r) => setTimeout(r, 300));
+    expect((await api(request, 'GET', '/version')).v).toBeTruthy();
+    expect((await api(request, 'GET', '/automation')).rows.length).toBeGreaterThan(0);
+  });
 });

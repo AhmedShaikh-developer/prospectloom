@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import express from 'express';
 import crypto from 'node:crypto';
 import { q, logActivity } from '../db/index.js';
@@ -30,7 +31,7 @@ import * as responder from '../services/responder.js';
 import { GAP_GROUPS, GAP_LABELS } from '../lib/audit.js';
 import { PRESETS } from '../lib/places.js';
 import { normalizeDomain as normDomain, emailDomain as emDomain } from '../lib/normalize.js';
-import { getAllSettings, saveSettings, getSetting, getBool } from '../lib/settings.js';
+import { getAllSettings, saveSettings, getSetting, setSetting, getBool } from '../lib/settings.js';
 import { STATUS_LABELS, EVIDENCE_TYPES, CONTACT_TYPES, SUPPRESSION_REASONS, PIPELINE_STAGES, HUBSPOT_PROPERTIES } from '../lib/constants.js';
 import { RESEARCH_CHECKS } from '../lib/qualification.js';
 import { config } from '../config.js';
@@ -441,6 +442,10 @@ if (config.testMode) {
   api.post('/test/inbound', h((req) => replies.processInbound(req.body)));
   api.get('/test/captured', h(() => mailer.captured));
   api.post('/test/send-tick', h(() => outreach.autoSendTick()));
+  api.post('/test/send-cycle', h(() => outreach.sendCycle()));
+  // the same shape as the crash on Nov 11: a mail connection times out and nobody listens for its error
+  api.post('/test/network-drop', h(() => { const em = new EventEmitter(); setTimeout(() => em.emit('error', Object.assign(new Error('Socket timeout'), { code: 'ETIMEOUT' })), 10); return { ok: true }; }));
+  api.post('/test/mail-wait-over', h(() => { if (getSetting('mail_paused_until')) setSetting('mail_paused_until', new Date(Date.now() - 1000).toISOString()); return mailer.mailPause(); }));
   api.post('/test/responder-tick', h(() => responder.tick()));
   api.post('/test/answer-due/:id', h((req) => { q.run("UPDATE messages SET send_after = datetime('now', '-1 minute') WHERE id = :id", { id: Number(req.params.id) }); return { ok: true }; }));
   api.post('/test/engine-tick', h((req) => engine.tick({ force: !!req.body?.force })));

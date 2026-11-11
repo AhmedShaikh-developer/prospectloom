@@ -59,7 +59,11 @@ cp .env.example .env     # then put GROQ_API_KEY=... in .env (never in .env.exam
 npm start                # http://127.0.0.1:4317
 ```
 
-Requires Node 22.13+ (uses the built-in `node:sqlite`). Data lives in `data/pipeline.db`. To keep a Mac awake during the sending window, run `caffeinate -i npm start`.
+Requires Node 22.13+ (uses the built-in `node:sqlite`). Data lives in `data/pipeline.db`.
+
+To leave it running on a Mac, use `npm run forever` (stop it with `npm run stop`). The app then runs in the background and keeps the Mac awake. If it ever stops, it starts again within seconds. The log is in `data/server.log`.
+
+If the internet or the mail server drops, the email stays approved and the app tests the connection again by itself after 1, 2 and 3 minutes, then every 5. Once the connection is back, sending carries on. Emails that missed their time still go out up to 2 hours after the window closes (setting: catch-up after the window).
 
 ## Setup (all free; the in-app **Setup guide** has the same steps)
 

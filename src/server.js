@@ -16,6 +16,26 @@ import { recoverJobs } from './services/jobs.js';
 import { authRouter } from './routes/auth.js';
 import * as auth from './services/auth.js';
 
+// Every log line gets the time, so the log shows when a connection dropped and when it came back.
+if (!config.testMode) {
+  for (const k of ['log', 'error']) {
+    const orig = console[k].bind(console);
+    console[k] = (...a) => orig(`[${new Date().toLocaleString('sv-SE')}]`, ...a);
+  }
+}
+// A lost internet connection must never stop the app: network errors are logged and the next scheduler
+// tick simply tries again. Anything else is a real bug: log it and exit, and the keep-alive
+// (npm run forever) starts the app again within seconds.
+const NETWORK_CODES = new Set(['ETIMEOUT', 'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'EPIPE', 'ENOTFOUND', 'EAI_AGAIN',
+  'ENETUNREACH', 'ENETDOWN', 'EHOSTUNREACH', 'EHOSTDOWN', 'ESOCKET', 'ECONNECTION', 'EPROTO', 'NoConnection', 'ERR_SSL_DECRYPTION_FAILED_OR_BAD_RECORD_MAC']);
+const isNetworkError = (e) => NETWORK_CODES.has(e?.code) || /socket (hang up|timeout|closed)|network|timed? ?out|ECONNRESET|TLS|greeting/i.test(String(e?.message || ''));
+process.on('uncaughtException', (e) => {
+  if (isNetworkError(e)) return console.error('[network] connection problem, carrying on:', e?.code || '', e?.message || e);
+  console.error('[fatal]', e?.stack || e);
+  process.exit(1);
+});
+process.on('unhandledRejection', (e) => console.error('[unhandled]', e?.code || '', e?.stack || e));
+
 getDb();
 primary(); // register the original database as the primary workspace
 const app = express();

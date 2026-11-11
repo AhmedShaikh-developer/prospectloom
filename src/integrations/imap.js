@@ -13,13 +13,17 @@ export function isConfigured() {
 }
 
 function client() {
-  return new ImapFlow({
+  const c = new ImapFlow({
     host: getSetting('imap_host'),
     port: Number(getSetting('imap_port') || 993),
     secure: true,
     auth: { user: imapUser(), pass: imapPass() },
     logger: false,
   });
+  // A dropped connection (Wi-Fi gone, server timeout) is reported here. Without a listener Node treats it as
+  // fatal and the whole app stops; with one, this sync just fails and the next one tries again.
+  c.on('error', (e) => console.error('[imap] connection dropped:', e?.code || '', e?.message || e));
+  return c;
 }
 
 export async function testConnection() {

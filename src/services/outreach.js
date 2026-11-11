@@ -5,7 +5,7 @@ import { q, nowIso, today, logActivity } from '../db/index.js';
 import { getSetting, getNum, getBool, setSetting } from '../lib/settings.js';
 import { getCompany, reevaluate, complianceStatus } from './companies.js';
 import { runDedup } from './suppression.js';
-import { sendMail, isMailboxError, recordMailError, clearMailError, mailPause, friendlyMailError } from '../integrations/mailer.js';
+import { sendMail, isMailboxError, recordMailError, clearMailError, mailPause, friendlyMailError, reconnect } from '../integrations/mailer.js';
 import { appendToSent } from '../integrations/imap.js';
 import { emailDomain } from '../lib/normalize.js';
 import { config } from '../config.js';
@@ -385,6 +385,22 @@ export function inSendWindow(d = new Date()) {
   return days.includes(day) && hour >= getNum('send_window_start') && hour < getNum('send_window_end');
 }
 
+/**
+ * Catch-up time after the window closes (send_catchup_minutes, default 120): emails that missed their
+ * time today because the connection dropped or the app was closed still go out, a few minutes apart.
+ * Returns the minute of the day (send timezone) the catch-up ends, or null when it is not catch-up time now.
+ */
+export function catchUpUntil(d = new Date()) {
+  const grace = Math.max(0, getNum('send_catchup_minutes'));
+  if (!grace) return null;
+  const z = zonedClock(d);
+  if (!getSetting('send_days').split(',').map(Number).includes(z.day)) return null;
+  const end = getNum('send_window_end') * 60;
+  const until = Math.min(24 * 60, end + grace);
+  const now = z.hour * 60 + z.minute;
+  return now >= end && now < until ? until : null;
+}
+
 /** Send one approved message (re-checking everything first). */
 export async function sendOne(id, { actor = 'user' } = {}) {
   const m = q.get('SELECT * FROM messages WHERE id = :id', { id });
@@ -449,9 +465,11 @@ export async function autoSendTick() {
   if (!getBool('auto_send_enabled') && !getBool('autopilot_enabled')) return { skipped: 'auto-send disabled' };
   if (bounceGuard().paused) return { skipped: 'bounce guard' };
   if (mailPause().paused) return { skipped: 'mailbox error' };
-  if (!inSendWindow()) return { skipped: 'outside send window' };
+  const inWindow = inSendWindow();
+  if (!inWindow && catchUpUntil() == null) return { skipped: 'outside send window' };
   if (quotaStatus().remaining <= 0) return { skipped: 'daily limit reached' };
   const plan = sendPlan();
+  if (!inWindow && plan.behind === 0) return { skipped: 'outside send window' };
   if (plan.due === 0) return { skipped: 'waiting for the first send time', next: plan.slots[0]?.at };
   if (plan.sent >= plan.due) return { skipped: 'waiting for the next send time', next: plan.next };
   const last = q.get("SELECT MAX(sent_at) AS t FROM messages WHERE status IN ('sent','bounced')").t;
@@ -462,6 +480,20 @@ export async function autoSendTick() {
     ORDER BY m.kind = 'follow_up' DESC, m.approved_at ASC LIMIT 1`, { now: nowIso() });
   if (!next) return { skipped: 'nothing approved' };
   return sendOne(next.id, { actor: 'scheduler' });
+}
+
+/**
+ * The scheduler's sending step, every minute: after a mailbox error it first tests the connection again
+ * (when the short wait is over), then sends whatever is due, so a dropped connection fixes itself.
+ */
+export async function sendCycle() {
+  const rc = await reconnect();
+  if (rc.reconnected) {
+    const mins = getSetting('mail_last_outage_minutes');
+    console.log(`[mailbox] connection is back${mins ? ` after ${mins} min` : ''}; sending carries on`);
+    logActivity(null, 'mailbox_reconnected', `The mailbox connection is back${mins ? ` after ${mins} minutes` : ''}. Sending carries on by itself.`, 'scheduler');
+  } else if (rc.error) console.error('[mailbox] still no connection:', rc.error, 'next test', rc.next);
+  return { reconnect: rc, send: await autoSendTick() };
 }
 
 export function unsubscribeByToken(token) {

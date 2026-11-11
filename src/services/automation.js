@@ -6,7 +6,7 @@ import { getSetting, getNum, getBool } from '../lib/settings.js';
 import { reportTimezone, parseTs, dayStartIn, nextDayStartIn } from '../lib/clock.js';
 import * as engine from './engine.js';
 import { isRunning as researchRunning, progress as researchProgress } from './research.js';
-import { sendPlan, quotaStatus, zonedDayStart, zonedNow, inSendWindow, bounceGuard } from './outreach.js';
+import { sendPlan, quotaStatus, zonedDayStart, zonedNow, inSendWindow, catchUpUntil, bounceGuard } from './outreach.js';
 import { mailPause } from '../integrations/mailer.js';
 import * as imap from '../integrations/imap.js';
 import { listSources } from './sources.js';
@@ -105,7 +105,7 @@ function writingRow(now) {
   if (getBool('autopilot_review') && held) return { ...row, ...next, state: 'attention', reason: `${plural(held, 'email')} written and waiting for your approval.`, fix: { href: '#/outreach', text: 'Approve them' } };
   if (aiWait) {
     const err = q.get("SELECT ai_error AS e FROM messages WHERE status = 'draft' AND kind = 'intro' AND ai_error IS NOT NULL ORDER BY id DESC LIMIT 1")?.e || '';
-    return { ...row, ...next, state: 'paused', reason: `${plural(aiWait, 'email')} waiting for the AI writer (${err.slice(0, 140)}). Template emails are never sent instead; it tries again every hour.`, fix: /API key/.test(err) ? { href: '#/settings?tab=ai', text: 'Check the Groq key' } : null };
+    return { ...row, ...next, state: 'paused', reason: `${plural(aiWait, 'email')} waiting for the AI writer (${err.slice(0, 140)}). Template emails are never sent instead; it tries again ${/reach Groq|fetch failed|Groq error 5/i.test(err) ? 'every 10 minutes until Groq answers' : 'every hour'}.`, fix: /API key/.test(err) ? { href: '#/settings?tab=ai', text: 'Check the Groq key' } : null };
   }
   if (approved && approved >= remaining) return { ...row, ...next, state: 'done', reason: `${plural(approved, 'email')} written and approved, enough for the next sends. It checks every hour for more.` };
   if (!ready) return { ...row, ...next, state: 'waiting', reason: 'No lead is ready to email yet. Research finds more; this checks every hour.' };
@@ -126,13 +126,24 @@ function sendingRow(now) {
   const bg = bounceGuard();
   if (bg.paused) return { ...row, state: 'paused', reason: `Paused to protect your domain: ${bg.rate}% of last week's emails bounced (the limit is 5%). It restarts once that drops.`, fix: { href: '#/replies', text: 'See bounces' } };
   const mp = mailPause();
-  if (mp.paused) return { ...row, state: 'paused', reason: `Paused after a mailbox error: ${mp.error || 'the mail server refused the connection'}`, next: mp.until, nextLabel: 'Tries again', fix: { href: '#/integrations', text: 'Check the mailbox' } };
+  if (mp.error) {
+    const how = mp.kind === 'auth' ? ' Fix the password in Integrations; the login is tested again every 30 minutes (more often could lock the mailbox).'
+      : mp.kind === 'limit' ? ' Hostinger is limiting sends for now; it tests again in 20 minutes and then carries on.'
+      : ' Nothing is lost: it tests the connection again by itself (after 1, 2, 3, then every 5 minutes) and sends the remaining emails as soon as it works, up to 2 hours after the window if needed.';
+    return { ...row, state: 'paused', reason: `Mailbox connection lost: ${mp.error}${how}`, next: mp.paused ? mp.until : iso(now), nextLabel: 'Tests the connection',
+      fix: mp.kind === 'auth' ? { href: '#/integrations', text: 'Check the mailbox' } : null };
+  }
   const approved = count("SELECT COUNT(*) AS n FROM messages WHERE status = 'approved'");
   const hours = `Sending hours are ${plan.windowStart}–${plan.windowEnd} in ${row.window.city}, while your recipients are at work.`;
   if (plan.sent >= plan.limit) {
     return { ...row, state: 'done', reason: `All ${plan.limit} emails for ${plan.dayLabel} are sent (your warm-up limit). ${hours}`, next: iso(nextWindowStart(now, { afterToday: true })), nextLabel: 'Next sending day' };
   }
   if (!inSendWindow(now)) {
+    const until = catchUpUntil(now);
+    if (until != null && plan.behind > 0 && approved) {
+      const end = `${String(Math.floor(until / 60) % 24).padStart(2, '0')}:${String(until % 60).padStart(2, '0')}`;
+      return { ...row, state: 'active', reason: `Catching up: ${plural(plan.limit - plan.sent, 'email')} for ${plan.dayLabel} missed ${plan.limit - plan.sent === 1 ? 'its' : 'their'} time (connection drop or the app was closed), so ${plan.limit - plan.sent === 1 ? 'it goes' : 'they go'} out a few minutes apart until ${end} in ${row.window.city}.`, next: iso(now), nextLabel: 'Next email' };
+    }
     return { ...row, state: 'waiting', reason: `Outside sending hours. ${hours}${approved ? ` ${plural(approved, 'email')} ready to go.` : ' Nothing is approved yet.'}`, next: iso(nextWindowStart(now)), nextLabel: 'Sending starts' };
   }
   if (!approved) return { ...row, state: 'waiting', reason: 'Inside sending hours, but no email is approved yet. Autopilot writes more within the hour.' };

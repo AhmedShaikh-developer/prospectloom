@@ -1340,7 +1340,7 @@ async function renderSettings({ params = {} } = {}) {
       ${f('watch_leads_folder', 'Import new CSV files from the “leads csv” folder automatically', { type: 'checkbox' })}</div>
       <div class="card" data-testid="volume-settings"><h2>Volume, timing &amp; warm-up</h2><p class="sub" style="margin:-6px 0 14px">Each day's emails go out at random times across the window — a few minutes apart, then a longer break, like a person working through a list. A 6-hour window (e.g. 9–15) is recommended.</p>
       <div class="grid g3">${f('daily_send_limit', 'Daily limit (warm-up starting level)', { type: 'number' })}${f('send_days', 'Send days (0=Sun … 6=Sat)')}
-      ${f('send_window_start', 'Send window start (hour)', { type: 'number' })}${f('send_window_end', 'Send window end (hour)', { type: 'number' })}${f('reserve_target_days', 'Reserve target (days)', { type: 'number' })}
+      ${f('send_window_start', 'Send window start (hour)', { type: 'number' })}${f('send_window_end', 'Send window end (hour)', { type: 'number' })}${f('send_catchup_minutes', 'Catch-up after the window (minutes): emails that missed their time still go out', { type: 'number' })}${f('reserve_target_days', 'Reserve target (days)', { type: 'number' })}
       ${f('min_minutes_between_sends', 'Shortest gap between emails (minutes)', { type: 'number' })}${f('max_minutes_between_sends', 'Usual longest gap (minutes)', { type: 'number' })}</div>
       ${f('send_spread', 'Send at random, human-like times across the whole window (recommended — protects your domain)', { type: 'checkbox' })}
       <h3>Warm-up</h3>

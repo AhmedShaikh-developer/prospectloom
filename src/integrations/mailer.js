@@ -47,10 +47,17 @@ export function friendlyMailError(e, kind = 'SMTP') {
   return msg.slice(0, 300) || `${kind} connection failed`;
 }
 
+/** Log in to the SMTP server without sending anything (raw errors). */
+async function probe() {
+  if (getSetting('mail_transport') === 'capture') return;
+  if (!mailboxPass()) throw Object.assign(new Error('No mailbox password is saved'), { code: 'EAUTH' });
+  await transport().verify();
+}
+
 export async function verifyConnection() {
-  if (getSetting('mail_transport') === 'capture') return { ok: true, detail: 'capture mode (test) — no real email is sent' };
+  if (getSetting('mail_transport') === 'capture') { clearMailError(); return { ok: true, detail: 'capture mode (test) — no real email is sent' }; }
   if (!mailboxPass()) throw new Error('Enter the mailbox password first (Settings → Integrations → Hostinger mailbox), then save.');
-  try { await transport().verify(); } catch (e) { throw new Error(friendlyMailError(e, 'SMTP')); }
+  try { await probe(); } catch (e) { throw new Error(friendlyMailError(e, 'SMTP')); }
   clearMailError();
   return { ok: true, detail: `Sending works — logged in to ${getSetting('smtp_host')} as ${mailboxUser()}` };
 }
@@ -67,22 +74,70 @@ export function isMailboxError(e) {
   return /too many|rate limit|limit exceeded|quota|try again later/i.test(String(e?.response || e?.message || ''));
 }
 
-const PAUSE_MINUTES = 30;
+/** What kind of mailbox problem this is; it decides how soon the connection is tested again. */
+export function mailErrorKind(e) {
+  const code = e?.code || '';
+  const rc = Number(e?.responseCode || 0);
+  const msg = String(e?.response || e?.message || '');
+  if (code === 'EAUTH' || e?.authenticationFailed || [530, 534, 535].includes(rc) || /authenticat|invalid credentials|login failed/i.test(msg)) return 'auth';
+  if ([421, 450, 451, 452, 454].includes(rc) || /too many|rate limit|limit exceeded|quota|try again later/i.test(msg)) return 'limit';
+  return 'network';
+}
+
+// Minutes until the connection is tested again. A dropped internet connection usually comes back within
+// minutes, so it is tested often (1, 2, 3, then every 5 minutes). A wrong password or Hostinger's sending
+// limit is tested gently, because repeated failed logins can get the mailbox locked.
+const RETRY_MINUTES = { network: [1, 2, 3, 5], limit: [20], auth: [30] };
+export function retryMinutes(kind, failures = 1) {
+  const steps = RETRY_MINUTES[kind] || RETRY_MINUTES.network;
+  return steps[Math.min(Math.max(1, failures), steps.length) - 1];
+}
+
+const MAIL_STATE = ['mail_last_error', 'mail_last_error_at', 'mail_paused_until', 'mail_error_kind', 'mail_fail_count', 'mail_down_since'];
 export function recordMailError(e) {
+  const kind = mailErrorKind(e);
+  const failures = Number(getSetting('mail_fail_count') || 0) + 1;
+  const now = new Date();
+  if (!getSetting('mail_last_error')) setSetting('mail_down_since', now.toISOString());
   setSetting('mail_last_error', friendlyMailError(e, 'SMTP'));
-  setSetting('mail_last_error_at', new Date().toISOString());
-  setSetting('mail_paused_until', new Date(Date.now() + PAUSE_MINUTES * 60000).toISOString());
+  setSetting('mail_last_error_at', now.toISOString());
+  setSetting('mail_error_kind', kind);
+  setSetting('mail_fail_count', String(failures));
+  setSetting('mail_paused_until', new Date(now.getTime() + retryMinutes(kind, failures) * 60000).toISOString());
 }
 export function clearMailError() {
   if (!getSetting('mail_last_error') && !getSetting('mail_paused_until')) return;
-  setSetting('mail_last_error', '');
-  setSetting('mail_last_error_at', '');
-  setSetting('mail_paused_until', '');
+  for (const k of MAIL_STATE) setSetting(k, '');
 }
 export function mailPause() {
   const until = getSetting('mail_paused_until');
   const error = getSetting('mail_last_error');
-  return { paused: !!until && new Date(until).getTime() > Date.now(), until: until || null, error: error || null, at: getSetting('mail_last_error_at') || null };
+  return {
+    paused: !!until && new Date(until).getTime() > Date.now(), until: until || null, error: error || null, at: getSetting('mail_last_error_at') || null,
+    kind: getSetting('mail_error_kind') || null, failures: Number(getSetting('mail_fail_count') || 0), since: getSetting('mail_down_since') || null,
+  };
+}
+
+/**
+ * Called by the scheduler every minute. After a mailbox error, once the wait is over, it tests the
+ * connection (the same login as "Test connection" in Settings). When it works, the error clears and
+ * sending carries on by itself, including the emails that missed their time. When it still fails,
+ * it waits a little longer and tests again.
+ */
+export async function reconnect() {
+  if (!getSetting('mail_last_error')) return { ok: true, skipped: 'no mailbox error' };
+  if (mailPause().paused) return { ok: false, waiting: getSetting('mail_paused_until') };
+  try {
+    await probe();
+  } catch (e) {
+    recordMailError(e);
+    return { ok: false, error: friendlyMailError(e, 'SMTP'), next: getSetting('mail_paused_until') };
+  }
+  const since = getSetting('mail_down_since');
+  clearMailError();
+  setSetting('mail_last_recovered_at', new Date().toISOString());
+  setSetting('mail_last_outage_minutes', String(since ? Math.max(1, Math.round((Date.now() - new Date(since).getTime()) / 60000)) : ''));
+  return { ok: true, reconnected: true, since };
 }
 
 /**
