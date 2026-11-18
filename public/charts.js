@@ -63,7 +63,8 @@ function drawSeriesChart(el, spec) {
   // x labels (about 6)
   if (spec.xAxis !== false) {
     const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(plotW / 90))));
-    spec.labels.forEach((l, i) => { if (i % every === 0 || i === n - 1) svg += `<text class="ax" x="${x(i)}" y="${H - 6}" text-anchor="${i === 0 && !isBars ? 'start' : i === n - 1 && !isBars ? 'end' : 'middle'}">${esc(spec.xFormat === 'date' ? shortDate(l) : l)}</text>`; });
+    // the last date is always shown; a regular label too close to it is dropped so the two never overlap
+    spec.labels.forEach((l, i) => { if (i === n - 1 || (i % every === 0 && n - 1 - i >= Math.ceil(every * 0.6))) svg += `<text class="ax" x="${x(i)}" y="${H - 6}" text-anchor="${i === 0 && !isBars ? 'start' : i === n - 1 && !isBars ? 'end' : 'middle'}">${esc(spec.xFormat === 'date' ? shortDate(l) : l)}</text>`; });
   }
   if (isBars) {
     const k = series.length; const gap = 2;
@@ -238,22 +239,28 @@ function animateMarks(el) {
 
 const DRAW = { area: drawSeriesChart, line: drawSeriesChart, bars: drawSeriesChart, spark: drawSpark, gauge: drawGauge, day: drawDay };
 
-export function hydrateCharts(root = document) {
-  root.querySelectorAll('.chart[data-spec]').forEach((el) => {
-    try { const spec = JSON.parse(el.dataset.spec); (DRAW[spec.type] || drawSeriesChart)(el, spec); el.dataset.w = el.clientWidth; } catch (e) { el.textContent = ''; }
-  });
+const sizeOf = (el) => `${el.clientWidth}x${el.clientHeight}`;
+function draw(el) {
+  try { const spec = JSON.parse(el.dataset.spec); (DRAW[spec.type] || drawSeriesChart)(el, spec); el.dataset.size = sizeOf(el); } catch (e) { el.textContent = ''; }
 }
 
-let resizeT = null;
-window.addEventListener('resize', () => {
-  clearTimeout(resizeT);
-  resizeT = setTimeout(() => {
-    document.querySelectorAll('.chart[data-spec]').forEach((el) => {
-      if (String(el.clientWidth) === el.dataset.w) return;
-      const spec = JSON.parse(el.dataset.spec); (DRAW[spec.type] || drawSeriesChart)(el, spec); el.dataset.w = el.clientWidth;
-    });
-  }, 150);
-});
+// Charts redraw when their box changes size: a narrower window, or a card that grows to match a taller
+// card next to it (the lead chart fills the whole orange card instead of leaving an empty band).
+const pending = new Set();
+let redrawT = null;
+const redrawLater = (el) => {
+  pending.add(el);
+  clearTimeout(redrawT);
+  redrawT = setTimeout(() => { for (const c of pending) if (c.isConnected && sizeOf(c) !== c.dataset.size) draw(c); pending.clear(); }, 120);
+};
+const sizeWatch = typeof ResizeObserver === 'function'
+  ? new ResizeObserver((entries) => entries.forEach(({ target }) => { if (sizeOf(target) !== target.dataset.size) redrawLater(target); }))
+  : null;
+if (!sizeWatch) window.addEventListener('resize', () => document.querySelectorAll('.chart[data-spec]').forEach(redrawLater));
+
+export function hydrateCharts(root = document) {
+  root.querySelectorAll('.chart[data-spec]').forEach((el) => { draw(el); sizeWatch?.observe(el); });
+}
 
 /** Count numbers up from 0 (elements with data-count). The final text is exactly toLocaleString(). */
 export function countUp(root = document) {

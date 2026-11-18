@@ -109,7 +109,7 @@ main { padding: 26px 32px 72px; width: 100%; max-width: 1480px; min-width: 0; ou
 /* ---------- Cards ---------- */
 .card { background: var(--card-grad), var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; box-shadow: var(--shadow); min-width: 0; transition: border-color .25s ease, transform .25s ease, box-shadow .25s ease, background-color .35s ease; position: relative; }
 .card + .card { margin-top: 16px; }
-.grid > .card + .card, .split > .card + .card, .split > * + *, .dash > * + *, .kpis > .card + .card, .int-grid > .card + .card { margin-top: 0; }
+.grid > .card + .card, .split > .card + .card, .split > * + *, .dash > * + *, .dash > .card + .card, .kpis > .card + .card, .int-grid > .card + .card { margin-top: 0; }
 .card.lift:hover { border-color: var(--line-strong); transform: translateY(-2px); }
 .card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
 .card-head h2 { margin: 0; display: flex; align-items: center; gap: 8px; }
@@ -472,6 +472,8 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
 .int-card > .int-actions { margin-top: auto; padding-top: 14px; }
 .kpis > .card { display: flex; flex-direction: column; }
 .dash > .card { display: flex; flex-direction: column; }
+/* The lead chart fills the orange card when the Autopilot card beside it is taller (no empty orange band). */
+.hero .chart { flex: 1 1 auto; min-height: 236px; }
 .logo-svg { width: 40px; height: 40px; flex: none; border-radius: 12px; box-shadow: 0 10px 24px -10px var(--brand-glow); }
 
 /* ================================================================= User menu */
